@@ -106,6 +106,8 @@ EVENTS COMMANDS (events: prefix):
 
 CLIENT COMMANDS (client: prefix):
   client:state             - Get TUI state
+  client:picker            - Get live inline picker state (filter/counts/visible rows)
+  client:picker:<n>        - Get live inline picker state with n-row render window
   client:frame             - Get latest visual debug frame (JSON)
   client:frame-normalized  - Get normalized frame (for diffs)
   client:screen            - Dump visual debug to file
