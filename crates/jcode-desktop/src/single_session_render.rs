@@ -304,14 +304,11 @@ pub(crate) fn welcome_hero_reveal_progress_for_elapsed(elapsed: Duration) -> f32
 }
 
 pub(crate) fn welcome_hero_runtime_mask_supported(phrase: &str) -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    let enabled = *ENABLED.get_or_init(|| {
-        std::env::var_os("JCODE_DESKTOP_RUNTIME_HERO_MASK").is_some_and(|value| {
-            !matches!(
-                value.to_string_lossy().trim().to_ascii_lowercase().as_str(),
-                "" | "0" | "false" | "off" | "no"
-            )
-        })
+    let enabled = std::env::var_os("JCODE_DESKTOP_RUNTIME_HERO_MASK").is_none_or(|value| {
+        !matches!(
+            value.to_string_lossy().trim().to_ascii_lowercase().as_str(),
+            "" | "0" | "false" | "off" | "no"
+        )
     });
     enabled && phrase.trim().eq_ignore_ascii_case("Hello there")
 }
@@ -1001,6 +998,7 @@ fn handwritten_welcome_paths_for_phrase(phrase: &str) -> Vec<Vec<[f32; 2]>> {
     }
 }
 
+#[allow(clippy::approx_constant)]
 fn handwritten_hello_there_paths() -> Vec<Vec<[f32; 2]>> {
     vec![
         vec![
@@ -4124,6 +4122,7 @@ fn push_aurora_ribbon(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_gradient_quad(
     vertices: &mut Vec<Vertex>,
     a: [f32; 2],
@@ -4149,6 +4148,7 @@ fn mix_color(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
     ]
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_gradient_triangle(
     vertices: &mut Vec<Vertex>,
     a: [f32; 2],
@@ -5239,7 +5239,23 @@ fn single_session_text_key_for_body_lines(
     let welcome_handoff_visible = false;
     let welcome_input_visible = true;
     let (welcome_hero, welcome_hint) = if welcome_chrome_visible {
-        (app.welcome_hero_text(), Vec::new())
+        let welcome_hint = if app.draft.is_empty() {
+            vec![SingleSessionStyledLine::new(
+                "Type a message to start. Ask me to build, debug, explain, or automate something.",
+                SingleSessionLineStyle::Meta,
+            )]
+        } else {
+            Vec::new()
+        };
+        (app.welcome_hero_text(), welcome_hint)
+    } else if app.is_fresh_welcome_visible() && app.draft.is_empty() {
+        (
+            String::new(),
+            vec![SingleSessionStyledLine::new(
+                "Type a message to start. Ask me to build, debug, explain, or automate something.",
+                SingleSessionLineStyle::Meta,
+            )],
+        )
     } else {
         (String::new(), Vec::new())
     };
@@ -5367,14 +5383,7 @@ fn single_session_text_buffers_from_key_reusing_unchanged_from_options(
         reuse_body_buffer || previous.is_some_and(|previous| previous.body == key.body),
     )
     .unwrap_or_else(|| {
-        single_session_styled_text_buffer(
-            font_system,
-            &key.body,
-            typography.body_size,
-            typography.body_size * typography.body_line_height,
-            content_width,
-            (size.height as f32 - 150.0).max(1.0),
-        )
+        single_session_body_text_buffer_from_lines(font_system, &key.body, size, text_scale)
     });
 
     let inline_widget_width = if key.inline_widget.is_empty() {
@@ -5397,6 +5406,7 @@ fn single_session_text_buffers_from_key_reusing_unchanged_from_options(
             typography.body_size * typography.body_line_height,
             inline_widget_width,
             prompt_height,
+            Wrap::Word,
         )
     });
 
@@ -5453,6 +5463,23 @@ fn single_session_text_buffers_from_key_reusing_unchanged_from_options(
         )
     });
 
+    let welcome_hint_buffer = take_reusable(
+        &mut old_buffers,
+        6,
+        previous.is_some_and(|previous| previous.welcome_hint == key.welcome_hint),
+    )
+    .unwrap_or_else(|| {
+        single_session_styled_text_buffer(
+            font_system,
+            &key.welcome_hint,
+            typography.meta_size,
+            typography.meta_size * typography.meta_line_height,
+            content_width,
+            48.0,
+            Wrap::Word,
+        )
+    });
+
     vec![
         title_buffer,
         body_buffer,
@@ -5460,6 +5487,7 @@ fn single_session_text_buffers_from_key_reusing_unchanged_from_options(
         version_buffer,
         inline_widget_buffer,
         hero_buffer,
+        welcome_hint_buffer,
     ]
 }
 
@@ -5478,6 +5506,7 @@ pub(crate) fn single_session_body_text_buffer_from_lines(
         typography.body_size * typography.body_line_height,
         content_width,
         (size.height as f32 - 150.0).max(1.0),
+        Wrap::None,
     );
     buffer.shape_until(font_system, i32::MAX);
     buffer
@@ -5730,7 +5759,7 @@ fn inline_spans_for_wrapped_range(
         .filter_map(|span| {
             let span_start = span.start.max(start);
             let span_end = span.end.min(end);
-            (span_start < span_end).then_some(SingleSessionInlineSpan {
+            (span_start < span_end).then(|| SingleSessionInlineSpan {
                 start: span_start - start,
                 end: span_end - start,
                 kind: span.kind,
@@ -5837,7 +5866,7 @@ fn single_session_body_bottom_base_for_total_lines(
     single_session_body_bottom(size)
 }
 
-fn single_session_body_bottom_for_total_lines(
+pub(crate) fn single_session_body_bottom_for_total_lines(
     app: &SingleSessionApp,
     size: PhysicalSize<u32>,
     total_lines: usize,
@@ -5897,6 +5926,10 @@ fn clip_rect_to_vertical_bounds(rect: Rect, top: f32, bottom: f32) -> Option<Rec
     })
 }
 
+fn text_bounds_bottom(value: f32) -> i32 {
+    value.ceil().clamp(0.0, i32::MAX as f32) as i32
+}
+
 fn single_session_text_buffer(
     font_system: &mut FontSystem,
     text: &str,
@@ -5945,9 +5978,11 @@ fn single_session_styled_text_buffer(
     line_height: f32,
     width: f32,
     height: f32,
+    wrap: Wrap,
 ) -> Buffer {
     let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
     buffer.set_size(font_system, width, height);
+    buffer.set_wrap(font_system, wrap);
     let segments = single_session_styled_text_segments(lines);
     let shaping = if segments
         .iter()
@@ -6488,12 +6523,11 @@ fn single_session_style_attrs_for_text(
 }
 
 fn single_session_font_family_for_style(style: SingleSessionLineStyle) -> &'static str {
-    let family = if is_ai_response_font_style(style) {
+    if is_ai_response_font_style(style) {
         SINGLE_SESSION_ASSISTANT_FONT_FAMILY
     } else {
         SINGLE_SESSION_FONT_FAMILY
-    };
-    family
+    }
 }
 
 fn single_session_style_attrs_for_family(
@@ -6506,7 +6540,7 @@ fn single_session_style_attrs_for_family(
 }
 
 fn text_contains_symbol_glyphs(text: &str) -> bool {
-    text.chars().any(|ch| !ch.is_ascii())
+    !text.is_ascii()
 }
 
 fn is_ai_response_font_style(style: SingleSessionLineStyle) -> bool {
@@ -6618,12 +6652,13 @@ pub(crate) fn single_session_text_areas_for_app_with_scroll<'a>(
         false,
         body_top_offset_pixels,
         single_session_body_top_for_app(app, size),
-        single_session_body_bottom_for_app(app, size) as i32,
+        text_bounds_bottom(single_session_body_bottom_for_app(app, size)),
         inline_widget_lines.len(),
         inline_widget_text_width,
         single_session_draft_top_for_app(app, size),
         welcome_chrome_offset_pixels,
         welcome_status_lane_visible(app),
+        app.is_fresh_welcome_visible() && app.draft.is_empty(),
         app.text_scale(),
         welcome_hero_runtime_mask_supported(&app.welcome_hero_text()),
         1.0,
@@ -6696,12 +6731,17 @@ pub(crate) fn single_session_text_areas_for_app_with_cached_body_viewport_and_re
         false,
         viewport.top_offset_pixels,
         single_session_body_top_for_app(app, size),
-        single_session_body_bottom_for_total_lines(app, size, viewport.total_lines) as i32,
+        text_bounds_bottom(single_session_body_bottom_for_total_lines(
+            app,
+            size,
+            viewport.total_lines,
+        )),
         inline_widget_lines.len(),
         inline_widget_text_width,
         single_session_draft_top_for_total_lines(app, size, viewport.total_lines),
         welcome_chrome_offset_pixels,
         welcome_status_lane_visible(app),
+        app.is_fresh_welcome_visible() && app.draft.is_empty(),
         app.text_scale(),
         welcome_hero_runtime_mask_supported(&app.welcome_hero_text()),
         welcome_hero_reveal_progress,
@@ -6734,8 +6774,11 @@ pub(crate) fn single_session_streaming_text_area_for_cached_body_viewport<'a>(
             left: 0,
             top: body_top as i32,
             right,
-            bottom: single_session_body_bottom_for_total_lines(app, size, viewport.total_lines)
-                as i32,
+            bottom: text_bounds_bottom(single_session_body_bottom_for_total_lines(
+                app,
+                size,
+                viewport.total_lines,
+            )),
         },
         default_color: text_color([
             ASSISTANT_TEXT_COLOR[0],
@@ -6758,11 +6801,12 @@ pub(crate) fn single_session_text_areas_for_fresh_state(
         false,
         0.0,
         PANEL_BODY_TOP_PADDING,
-        single_session_body_bottom(size) as i32,
+        text_bounds_bottom(single_session_body_bottom(size)),
         0,
         0.0,
         single_session_draft_top_for_fresh_state(size, fresh_welcome_visible),
         0.0,
+        false,
         false,
         1.0,
         false,
@@ -6776,6 +6820,7 @@ fn welcome_status_lane_visible(app: &SingleSessionApp) -> bool {
     false
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn single_session_text_areas_for_state(
     buffers: &[Buffer],
     size: PhysicalSize<u32>,
@@ -6789,6 +6834,7 @@ pub(crate) fn single_session_text_areas_for_state(
     draft_top: f32,
     welcome_chrome_offset_pixels: f32,
     status_lane_visible: bool,
+    startup_hint_visible: bool,
     ui_scale: f32,
     welcome_hero_runtime_mask_available: bool,
     welcome_hero_reveal_progress: f32,
@@ -6873,6 +6919,27 @@ pub(crate) fn single_session_text_areas_for_state(
                 bottom,
             },
             default_color: text_color(PANEL_SECTION_COLOR),
+        });
+    }
+
+    if startup_hint_visible
+        && !welcome_handoff_visible
+        && !status_lane_visible
+        && let Some(hint_buffer) = buffers.get(6)
+    {
+        let hint_top = draft_top + typography.code_size * typography.code_line_height * 1.35;
+        areas.push(TextArea {
+            buffer: hint_buffer,
+            left,
+            top: hint_top,
+            scale: 1.0,
+            bounds: TextBounds {
+                left: 0,
+                top: hint_top as i32,
+                right,
+                bottom,
+            },
+            default_color: text_color(META_TEXT_COLOR),
         });
     }
 
@@ -6974,19 +7041,21 @@ fn visualize_composer_whitespace(text: &str) -> String {
 }
 
 pub(crate) fn desktop_header_version_label() -> String {
-    let version = option_env!("JCODE_DESKTOP_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"));
-    let binary = std::env::current_exe()
+    desktop_app_directory_label()
+}
+
+fn desktop_app_directory_label() -> String {
+    std::env::current_exe()
         .ok()
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|| "unknown binary".to_string());
-    format!("{binary} · {version}")
+        .and_then(|path| {
+            path.parent()
+                .map(|directory| directory.display().to_string())
+        })
+        .unwrap_or_else(|| "unknown app directory".to_string())
 }
 
 pub(crate) fn fresh_welcome_version_label() -> String {
-    let version = option_env!("JCODE_PRODUCT_VERSION")
-        .or(option_env!("JCODE_DESKTOP_VERSION"))
-        .unwrap_or(env!("CARGO_PKG_VERSION"));
-    format!("jcode {version}")
+    desktop_app_directory_label()
 }
 
 fn fresh_welcome_version_font_size() -> f32 {

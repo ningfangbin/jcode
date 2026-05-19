@@ -753,19 +753,18 @@ impl Workspace {
             return false;
         }
 
-        if let Some(neighbor_id) = self.column_neighbor_id(direction) {
-            if let Some(neighbor_index) = self
+        if let Some(neighbor_id) = self.column_neighbor_id(direction)
+            && let Some(neighbor_index) = self
                 .surfaces
                 .iter()
                 .position(|surface| surface.id == neighbor_id)
-            {
-                let focused_column = self.surfaces[focused_index].column;
-                let neighbor_column = self.surfaces[neighbor_index].column;
-                self.surfaces[focused_index].column = neighbor_column;
-                self.surfaces[neighbor_index].column = focused_column;
-                self.detail_scroll = 0;
-                return true;
-            }
+        {
+            let focused_column = self.surfaces[focused_index].column;
+            let neighbor_column = self.surfaces[neighbor_index].column;
+            self.surfaces[focused_index].column = neighbor_column;
+            self.surfaces[neighbor_index].column = focused_column;
+            self.detail_scroll = 0;
+            return true;
         }
         false
     }

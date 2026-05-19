@@ -519,7 +519,7 @@ struct FakeReloadClientRequests {
 fn fake_desktop_server_accept_old_reload_client(
     listener: &UnixListener,
     session_id: &str,
-    new_socket_path: &PathBuf,
+    new_socket_path: &std::path::Path,
 ) -> Result<FakeReloadClientRequests> {
     let (mut reader, mut writer, subscribe) = accept_first_requesting_client(listener)?;
     write_json_line(&mut writer, json!({"type": "ack", "id": subscribe["id"]}))?;

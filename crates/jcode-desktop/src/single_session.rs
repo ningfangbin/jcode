@@ -229,8 +229,9 @@ impl ReadOnlyInlineWidget {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub(crate) enum SingleSessionLineStyle {
+    #[default]
     Assistant,
     AssistantHeading,
     AssistantQuote,
@@ -280,7 +281,7 @@ pub(crate) struct StdinResponseState {
     pub(crate) input: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ModelPickerState {
     pub(crate) open: bool,
     pub(crate) loading: bool,
@@ -292,23 +293,6 @@ pub(crate) struct ModelPickerState {
     pub(crate) provider_name: Option<String>,
     pub(crate) choices: Vec<DesktopModelChoice>,
     pub(crate) error: Option<String>,
-}
-
-impl Default for ModelPickerState {
-    fn default() -> Self {
-        Self {
-            open: false,
-            loading: false,
-            preview: false,
-            filter: String::new(),
-            selected: 0,
-            column: 0,
-            current_model: None,
-            provider_name: None,
-            choices: Vec::new(),
-            error: None,
-        }
-    }
 }
 
 impl ModelPickerState {
@@ -854,8 +838,8 @@ impl SingleSessionApp {
             && !self.model_picker.open
             && !self.session_switcher.open
             && self.stdin_response.is_none()
-            && self.show_help == false
-            && self.show_session_info == false
+            && !self.show_help
+            && !self.show_session_info
             && self.session.is_some()
     }
 
@@ -882,7 +866,7 @@ impl SingleSessionApp {
 
         #[cfg(test)]
         {
-            return 1.0;
+            1.0
         }
 
         #[cfg(not(test))]
@@ -1589,12 +1573,17 @@ impl SingleSessionApp {
                             tool_message,
                             &mut user_turn,
                             is_active_tool,
+                            if is_active_tool {
+                                Some(self.active_tool_input_buffer.as_str())
+                            } else {
+                                None
+                            },
                         );
                     }
                 }
                 continue;
             }
-            append_chat_message_lines(&mut lines, message, &mut user_turn, false);
+            append_chat_message_lines(&mut lines, message, &mut user_turn, false, None);
             message_index += 1;
         }
         if include_streaming_response && !self.streaming_response.is_empty() {
@@ -1633,6 +1622,8 @@ impl SingleSessionApp {
             .hash(&mut hasher);
         hash_messages_cache_fingerprint(&self.messages, &mut hasher);
         hash_text_cache_fingerprint(&self.streaming_response, &mut hasher);
+        self.active_tool_message_index.hash(&mut hasher);
+        hash_text_cache_fingerprint(&self.active_tool_input_buffer, &mut hasher);
         self.status.hash(&mut hasher);
         self.error.hash(&mut hasher);
         self.show_help.hash(&mut hasher);
@@ -1669,6 +1660,8 @@ impl SingleSessionApp {
             })
             .hash(&mut hasher);
         hash_messages_cache_fingerprint(&self.messages, &mut hasher);
+        self.active_tool_message_index.hash(&mut hasher);
+        hash_text_cache_fingerprint(&self.active_tool_input_buffer, &mut hasher);
         self.status.hash(&mut hasher);
         self.error.hash(&mut hasher);
         self.show_help.hash(&mut hasher);
@@ -2314,8 +2307,8 @@ impl SingleSessionApp {
         }
         let end_line = end.line.min(lines.len().saturating_sub(1));
         let mut segments = Vec::new();
-        for line_index in start.line..=end_line {
-            let line_len = lines[line_index].chars().count();
+        for (line_index, line) in lines.iter().enumerate().take(end_line + 1).skip(start.line) {
+            let line_len = line.chars().count();
             let prompt_columns = if line_index == 0 {
                 self.composer_prompt().chars().count()
             } else {
@@ -2409,8 +2402,8 @@ impl SingleSessionApp {
 
         let end_line = end.line.min(lines.len().saturating_sub(1));
         let mut segments = Vec::new();
-        for line_index in start.line..=end_line {
-            let line_len = lines[line_index].chars().count();
+        for (line_index, line) in lines.iter().enumerate().take(end_line + 1).skip(start.line) {
+            let line_len = line.chars().count();
             let start_column = if line_index == start.line {
                 start.column.min(line_len)
             } else {
@@ -2447,8 +2440,7 @@ impl SingleSessionApp {
         }
         let end_line = end.line.min(lines.len().saturating_sub(1));
         let mut selected = Vec::new();
-        for line_index in start.line..=end_line {
-            let line = &lines[line_index];
+        for (line_index, line) in lines.iter().enumerate().take(end_line + 1).skip(start.line) {
             let line_len = line.chars().count();
             let start_column = if line_index == start.line {
                 start.column.min(line_len)
@@ -3489,6 +3481,7 @@ fn append_chat_message_lines(
     message: &SingleSessionMessage,
     user_turn: &mut usize,
     is_active_tool: bool,
+    active_tool_input: Option<&str>,
 ) {
     match message.role {
         SingleSessionRole::User => {
@@ -3496,7 +3489,12 @@ fn append_chat_message_lines(
             *user_turn += 1;
         }
         SingleSessionRole::Assistant => append_assistant_lines(lines, message.content.trim()),
-        SingleSessionRole::Tool => append_tool_lines(lines, message.content.trim(), is_active_tool),
+        SingleSessionRole::Tool => append_tool_lines(
+            lines,
+            message.content.trim(),
+            is_active_tool,
+            active_tool_input,
+        ),
         SingleSessionRole::System | SingleSessionRole::Meta => {
             append_meta_lines(lines, message.content.trim())
         }
@@ -3649,12 +3647,6 @@ struct AssistantMarkdownTable {
     current_cell: String,
     header_rows: usize,
     alignments: Vec<Alignment>,
-}
-
-impl Default for SingleSessionLineStyle {
-    fn default() -> Self {
-        Self::Assistant
-    }
 }
 
 impl AssistantMarkdownRenderer {
@@ -4483,7 +4475,12 @@ fn format_table_separator(widths: &[usize], alignments: &[Alignment]) -> String 
     rendered
 }
 
-fn append_tool_lines(lines: &mut Vec<SingleSessionStyledLine>, content: &str, active: bool) {
+fn append_tool_lines(
+    lines: &mut Vec<SingleSessionStyledLine>,
+    content: &str,
+    active: bool,
+    active_input: Option<&str>,
+) {
     if content.is_empty() {
         return;
     }
@@ -4511,6 +4508,9 @@ fn append_tool_lines(lines: &mut Vec<SingleSessionStyledLine>, content: &str, ac
         } else if !line.trim().is_empty() {
             widget_lines.push(compact_tool_widget_text(line.trim(), 112));
         }
+    }
+    if let Some(raw_input) = active_input.filter(|input| !input.is_empty()) {
+        metadata_lines.extend(formatted_tool_input_lines(&header.name, raw_input));
     }
 
     lines.push(styled_line(
@@ -4696,7 +4696,6 @@ fn tool_summary_name(content: &str) -> String {
         .next()
         .unwrap_or("tool")
         .trim_start_matches(['▾', '▸'])
-        .trim()
         .split_whitespace()
         .next()
         .filter(|name| !name.is_empty())
@@ -5162,7 +5161,7 @@ mod tests {
 
     fn rendered_tool_text(content: &str, active: bool) -> Vec<String> {
         let mut lines = Vec::new();
-        append_tool_lines(&mut lines, content, active);
+        append_tool_lines(&mut lines, content, active, None);
         lines.into_iter().map(|line| line.text).collect()
     }
 

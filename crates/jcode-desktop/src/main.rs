@@ -392,7 +392,7 @@ async fn run() -> Result<()> {
             None
         };
         let backend_wake = pending_backend_redraw_since
-            .and_then(|_| last_backend_redraw_request)
+            .and(last_backend_redraw_request)
             .map(|last| last + BACKEND_REDRAW_FRAME_INTERVAL);
         let space_hold_wake = space_hold_started_at.and_then(|started_at| match &app {
             DesktopApp::Workspace(workspace) if !space_hold_consumed => {
@@ -569,13 +569,13 @@ async fn run() -> Result<()> {
                 }
                 WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Released => {
                     if app.is_workspace() && is_space_key(&event.logical_key) {
-                        if space_hold_started_at.take().is_some() && !space_hold_consumed {
-                            if matches!(&app, DesktopApp::Workspace(workspace) if workspace.mode == InputMode::Insert)
-                                && matches!(app.handle_key(KeyInput::Character(" ".to_string())), KeyOutcome::Redraw)
-                            {
-                                window.set_title(&app.status_title());
-                                window.request_redraw();
-                            }
+                        if space_hold_started_at.take().is_some()
+                            && !space_hold_consumed
+                            && matches!(&app, DesktopApp::Workspace(workspace) if workspace.mode == InputMode::Insert)
+                            && matches!(app.handle_key(KeyInput::Character(" ".to_string())), KeyOutcome::Redraw)
+                        {
+                            window.set_title(&app.status_title());
+                            window.request_redraw();
                         }
                         space_hold_consumed = false;
                     }
@@ -4053,10 +4053,7 @@ fn binary_modified_time(path: &Path) -> Option<std::time::SystemTime> {
         Ok(metadata) => metadata,
         Err(_) => return None,
     };
-    match metadata.modified() {
-        Ok(modified) => Some(modified),
-        Err(_) => None,
-    }
+    metadata.modified().ok()
 }
 
 fn resolve_invoked_binary(argv0: &OsString) -> Option<PathBuf> {
@@ -4071,6 +4068,7 @@ fn resolve_invoked_binary(argv0: &OsString) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
+#[allow(clippy::large_enum_variant)]
 enum DesktopApp {
     SingleSession(SingleSessionApp),
     Workspace(Workspace),
@@ -4645,6 +4643,7 @@ fn desktop_session_event_refreshes_session_card(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn log_desktop_session_event_batch_profile(
     raw_event_count: usize,
     raw_payload_bytes: usize,
@@ -5743,14 +5742,14 @@ fn desktop_profile_log_sender() -> Option<&'static mpsc::Sender<DesktopProfileLo
                 .name("jcode-desktop-profile-log".to_string())
                 .spawn(move || {
                     let mut file = path.and_then(|path| {
-                        if let Some(parent) = path.parent() {
-                            if let Err(error) = std::fs::create_dir_all(parent) {
-                                desktop_log::error(format_args!(
-                                    "jcode-desktop: failed to create profile log directory {}: {error}",
-                                    parent.display()
-                                ));
-                                return None;
-                            }
+                        if let Some(parent) = path.parent()
+                            && let Err(error) = std::fs::create_dir_all(parent)
+                        {
+                            desktop_log::error(format_args!(
+                                "jcode-desktop: failed to create profile log directory {}: {error}",
+                                parent.display()
+                            ));
+                            return None;
                         }
                         match OpenOptions::new().create(true).append(true).open(&path) {
                             Ok(file) => Some(file),
@@ -5767,13 +5766,13 @@ fn desktop_profile_log_sender() -> Option<&'static mpsc::Sender<DesktopProfileLo
                         if stderr_enabled {
                             eprintln!("{}", line.stderr_line);
                         }
-                        if let Some(profile_file) = file.as_mut() {
-                            if let Err(error) = writeln!(profile_file, "{}", line.jsonl_line) {
-                                desktop_log::error(format_args!(
-                                    "jcode-desktop: failed to write profile log: {error}"
-                                ));
-                                file = None;
-                            }
+                        if let Some(profile_file) = file.as_mut()
+                            && let Err(error) = writeln!(profile_file, "{}", line.jsonl_line)
+                        {
+                            desktop_log::error(format_args!(
+                                "jcode-desktop: failed to write profile log: {error}"
+                            ));
+                            file = None;
                         }
                     }
                 }) {
@@ -5844,6 +5843,7 @@ fn log_desktop_slow_interaction(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn single_session_streaming_primitive_geometry_cache_key(
     app: &SingleSessionApp,
     size: PhysicalSize<u32>,
@@ -6980,10 +6980,9 @@ impl<'window> Canvas<'window> {
                 render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
                 render_pass.draw(0..primitive_vertex_count as u32, 0..1);
             }
-            if hero_mask_prepared {
-                if let Some(hero_mask_renderer) = self.hero_mask_renderer.as_ref() {
-                    hero_mask_renderer.render_prepared(&mut render_pass);
-                }
+            if hero_mask_prepared && let Some(hero_mask_renderer) = self.hero_mask_renderer.as_ref()
+            {
+                hero_mask_renderer.render_prepared(&mut render_pass);
             }
             if has_text_buffers
                 && let (Some(text_renderer), Some(text_atlas)) =

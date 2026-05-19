@@ -157,11 +157,7 @@ pub(super) fn read_session_id_from_events(
                     };
                     return Ok(Some(session_id.to_string()));
                 }
-                if let Some(event) = desktop_event_from_server_value(&value) {
-                    if !matches!(event, DesktopSessionEvent::Done) {
-                        send_desktop_event_ref(event_tx, event);
-                    }
-                }
+                forward_non_done_server_event(event_tx, &value);
                 if value.get("type").and_then(Value::as_str) == Some("error") {
                     let message = value
                         .get("message")
@@ -219,11 +215,7 @@ pub(super) fn read_session_id_from_state(
                     };
                     return Ok(session_id.to_string());
                 }
-                if let Some(event) = desktop_event_from_server_value(&value) {
-                    if !matches!(event, DesktopSessionEvent::Done) {
-                        send_desktop_event_ref(event_tx, event);
-                    }
-                }
+                forward_non_done_server_event(event_tx, &value);
                 if value.get("type").and_then(Value::as_str) == Some("error")
                     && value.get("id").and_then(Value::as_u64) == Some(state_request_id)
                 {
@@ -277,11 +269,7 @@ pub(super) fn read_model_changed(
                     }
                     return Ok(());
                 }
-                if let Some(event) = desktop_event_from_server_value(&value) {
-                    if !matches!(event, DesktopSessionEvent::Done) {
-                        send_desktop_event_ref(event_tx, event);
-                    }
-                }
+                forward_non_done_server_event(event_tx, &value);
                 if value.get("type").and_then(Value::as_str) == Some("error")
                     && value.get("id").and_then(Value::as_u64) == Some(request_id)
                 {
@@ -332,11 +320,7 @@ pub(super) fn read_history_reasoning_effort(
                 {
                     return Ok(history_reasoning_effort_from_server_value(&value));
                 }
-                if let Some(event) = desktop_event_from_server_value(&value) {
-                    if !matches!(event, DesktopSessionEvent::Done) {
-                        send_desktop_event_ref(event_tx, event);
-                    }
-                }
+                forward_non_done_server_event(event_tx, &value);
                 if value.get("type").and_then(Value::as_str) == Some("error")
                     && value.get("id").and_then(Value::as_u64) == Some(request_id)
                 {
@@ -390,11 +374,7 @@ pub(super) fn read_reasoning_effort_changed(
                     }
                     return Ok(());
                 }
-                if let Some(event) = desktop_event_from_server_value(&value) {
-                    if !matches!(event, DesktopSessionEvent::Done) {
-                        send_desktop_event_ref(event_tx, event);
-                    }
-                }
+                forward_non_done_server_event(event_tx, &value);
                 if value.get("type").and_then(Value::as_str) == Some("error")
                     && value.get("id").and_then(Value::as_u64) == Some(request_id)
                 {
@@ -449,11 +429,7 @@ pub(super) fn read_model_catalog(
                     }
                     anyhow::bail!("jcode server returned malformed model catalog");
                 }
-                if let Some(event) = desktop_event_from_server_value(&value) {
-                    if !matches!(event, DesktopSessionEvent::Done) {
-                        send_desktop_event_ref(event_tx, event);
-                    }
-                }
+                forward_non_done_server_event(event_tx, &value);
                 if value.get("type").and_then(Value::as_str) == Some("error")
                     && value.get("id").and_then(Value::as_u64) == Some(request_id)
                 {
@@ -549,10 +525,10 @@ pub(super) fn drain_session_events(
                             .is_none_or(|id| id == terminal_request_id),
                         _ => false,
                     };
-                    if let Some(event) = desktop_event_from_server_value(&value) {
-                        if !matches!(event, DesktopSessionEvent::Done) || is_terminal {
-                            send_desktop_event_ref(event_tx, event);
-                        }
+                    if let Some(event) = desktop_event_from_server_value(&value)
+                        && (!matches!(event, DesktopSessionEvent::Done) || is_terminal)
+                    {
+                        send_desktop_event_ref(event_tx, event);
                     }
                     if is_terminal {
                         return Ok(DrainOutcome::Terminal);
@@ -573,6 +549,14 @@ fn parse_server_event_line(line: &str, context: &str) -> Result<Value> {
             ));
             Err(error).context("failed to parse jcode server event")
         }
+    }
+}
+
+fn forward_non_done_server_event(event_tx: Option<&DesktopSessionEventSender>, value: &Value) {
+    if let Some(event) = desktop_event_from_server_value(value)
+        && !matches!(event, DesktopSessionEvent::Done)
+    {
+        send_desktop_event_ref(event_tx, event);
     }
 }
 
