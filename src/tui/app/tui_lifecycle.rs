@@ -962,17 +962,8 @@ impl App {
         let render_start = Instant::now();
         let (rendered_messages, rendered_images) =
             crate::session::render_messages_and_images(&session);
-        let display_messages = rendered_messages
-            .into_iter()
-            .map(|item| DisplayMessage {
-                role: item.role,
-                content: item.content,
-                tool_calls: item.tool_calls,
-                duration_secs: None,
-                title: None,
-                tool_data: item.tool_data,
-            })
-            .collect();
+        let display_messages =
+            jcode_tui_messages::display_messages_from_rendered_messages(rendered_messages);
         self.replace_display_messages(display_messages);
         let render_ms = render_start.elapsed().as_millis();
 

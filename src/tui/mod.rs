@@ -1194,17 +1194,9 @@ pub use ui::{
 };
 
 pub fn display_messages_from_session(session: &crate::session::Session) -> Vec<DisplayMessage> {
-    let mut messages: Vec<DisplayMessage> = crate::session::render_messages(session)
-        .into_iter()
-        .map(|item| DisplayMessage {
-            role: item.role,
-            content: item.content,
-            tool_calls: item.tool_calls,
-            duration_secs: None,
-            title: None,
-            tool_data: item.tool_data,
-        })
-        .collect();
+    let mut messages = jcode_tui_messages::display_messages_from_rendered_messages(
+        crate::session::render_messages(session),
+    );
     app::compact_display_messages_for_storage(&mut messages);
     messages
 }

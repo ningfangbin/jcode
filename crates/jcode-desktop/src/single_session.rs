@@ -4,6 +4,7 @@ use crate::{
     },
     workspace,
 };
+use jcode_tui_messages::DisplayMessage;
 use pulldown_cmark::{
     Alignment, BlockQuoteKind, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
 };
@@ -770,10 +771,9 @@ impl SessionSwitcherState {
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug)]
 pub(crate) struct SingleSessionMessage {
-    role: SingleSessionRole,
-    content: String,
+    display: DisplayMessage,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -794,42 +794,61 @@ impl SingleSessionRole {
 
 impl SingleSessionMessage {
     pub(crate) fn user(content: impl Into<String>) -> Self {
-        Self {
-            role: SingleSessionRole::User,
-            content: content.into(),
-        }
+        Self::from_display_message(DisplayMessage::user(content))
     }
 
     pub(crate) fn assistant(content: impl Into<String>) -> Self {
-        Self {
-            role: SingleSessionRole::Assistant,
-            content: content.into(),
-        }
+        Self::from_display_message(DisplayMessage::assistant(content))
     }
 
     pub(crate) fn tool(content: impl Into<String>) -> Self {
-        Self {
-            role: SingleSessionRole::Tool,
-            content: content.into(),
-        }
+        Self::from_display_message(DisplayMessage::tool_text(content))
     }
 
     #[allow(dead_code)]
     pub(crate) fn system(content: impl Into<String>) -> Self {
-        Self {
-            role: SingleSessionRole::System,
-            content: content.into(),
-        }
+        Self::from_display_message(DisplayMessage::system(content))
     }
 
     #[allow(dead_code)]
     pub(crate) fn meta(content: impl Into<String>) -> Self {
-        Self {
-            role: SingleSessionRole::Meta,
-            content: content.into(),
+        Self::from_display_message(DisplayMessage::meta(content))
+    }
+
+    pub(crate) fn from_display_message(display: DisplayMessage) -> Self {
+        Self { display }
+    }
+
+    fn role(&self) -> SingleSessionRole {
+        match self.display.role.as_str() {
+            "user" => SingleSessionRole::User,
+            "assistant" => SingleSessionRole::Assistant,
+            "tool" => SingleSessionRole::Tool,
+            "system" | "background_task" => SingleSessionRole::System,
+            _ => SingleSessionRole::Meta,
         }
     }
+
+    fn content(&self) -> &str {
+        &self.display.content
+    }
+
+    fn set_content(&mut self, content: impl Into<String>) {
+        self.display.content = content.into();
+    }
+
+    fn content_mut(&mut self) -> &mut String {
+        &mut self.display.content
+    }
 }
+
+impl PartialEq for SingleSessionMessage {
+    fn eq(&self, other: &Self) -> bool {
+        self.display.role == other.display.role && self.display.content == other.display.content
+    }
+}
+
+impl Eq for SingleSessionMessage {}
 
 fn hash_messages_cache_fingerprint<H: Hasher>(messages: &[SingleSessionMessage], hasher: &mut H) {
     messages.len().hash(hasher);
@@ -860,8 +879,8 @@ fn hash_messages_cache_fingerprint<H: Hasher>(messages: &[SingleSessionMessage],
 }
 
 fn hash_message_cache_fingerprint<H: Hasher>(message: &SingleSessionMessage, hasher: &mut H) {
-    message.role.hash(hasher);
-    hash_text_cache_fingerprint(&message.content, hasher);
+    message.role().hash(hasher);
+    hash_text_cache_fingerprint(message.content(), hasher);
 }
 
 fn hash_text_cache_fingerprint<H: Hasher>(text: &str, hasher: &mut H) {
@@ -1085,7 +1104,7 @@ impl SingleSessionApp {
     pub(crate) fn user_turn_count(&self) -> usize {
         self.messages
             .iter()
-            .filter(|message| message.role.is_user())
+            .filter(|message| message.role().is_user())
             .count()
     }
 
@@ -1769,10 +1788,10 @@ impl SingleSessionApp {
                 lines.push(blank_styled_line());
             }
             let message = &self.messages[message_index];
-            if message.role == SingleSessionRole::Tool {
+            if message.role() == SingleSessionRole::Tool {
                 let group_start = message_index;
                 while message_index < self.messages.len()
-                    && self.messages[message_index].role == SingleSessionRole::Tool
+                    && self.messages[message_index].role() == SingleSessionRole::Tool
                 {
                     message_index += 1;
                 }
@@ -1996,10 +2015,11 @@ impl SingleSessionApp {
                 self.flush_active_tool_input_to_message();
                 if let Some(index) = self.tool.active_message_index
                     && let Some(message) = self.messages.get_mut(index)
-                    && message.role == SingleSessionRole::Tool
+                    && message.role() == SingleSessionRole::Tool
                 {
-                    message.content =
-                        merge_tool_finish_with_existing_context(&message.content, &line);
+                    let replacement =
+                        merge_tool_finish_with_existing_context(message.content(), &line);
+                    message.set_content(replacement);
                 } else {
                     self.messages.push(SingleSessionMessage::tool(line));
                     self.tool.active_message_index = Some(self.messages.len().saturating_sub(1));
@@ -2141,8 +2161,8 @@ impl SingleSessionApp {
         self.messages
             .iter()
             .rev()
-            .find(|message| message.role == SingleSessionRole::Assistant)
-            .map(|message| message.content.trim().to_string())
+            .find(|message| message.role() == SingleSessionRole::Assistant)
+            .map(|message| message.content().trim().to_string())
             .filter(|message| !message.is_empty())
     }
 
@@ -2723,11 +2743,11 @@ impl SingleSessionApp {
         let Some(message) = self.messages.get_mut(index) else {
             return;
         };
-        if message.role != SingleSessionRole::Tool {
+        if message.role() != SingleSessionRole::Tool {
             return;
         }
-        if let Some(first_line) = message.content.lines().next() {
-            message.content = first_line.replacen('▾', "▸", 1);
+        if let Some(first_line) = message.content().lines().next() {
+            message.set_content(first_line.replacen('▾', "▸", 1));
         }
     }
 
@@ -2748,13 +2768,13 @@ impl SingleSessionApp {
         let Some(message) = self.messages.get_mut(index) else {
             return;
         };
-        if message.role != SingleSessionRole::Tool {
+        if message.role() != SingleSessionRole::Tool {
             return;
         }
-        if !message.content.contains("\n  input: ") {
-            message.content.push_str("\n  input: ");
+        if !message.content().contains("\n  input: ") {
+            message.content_mut().push_str("\n  input: ");
         }
-        message.content.push_str(&self.tool.input_buffer);
+        message.content_mut().push_str(&self.tool.input_buffer);
         self.tool.input_buffer.clear();
     }
 
@@ -2771,10 +2791,10 @@ impl SingleSessionApp {
             self.tool.active_message_index = Some(self.messages.len().saturating_sub(1));
             return;
         };
-        if message.role == SingleSessionRole::Tool {
-            let replacement = merge_tool_finish_with_existing_context(&message.content, header);
-            if message.content != replacement {
-                message.content = replacement;
+        if message.role() == SingleSessionRole::Tool {
+            let replacement = merge_tool_finish_with_existing_context(message.content(), header);
+            if message.content() != replacement {
+                message.set_content(replacement);
             }
         }
     }
@@ -3257,7 +3277,7 @@ fn session_info_inline_styled_lines(app: &SingleSessionApp) -> Vec<SingleSession
     let transcript_chars: usize = app
         .messages
         .iter()
-        .map(|message| message.content.len())
+        .map(|message| message.content().len())
         .sum();
     let streaming_chars = app.streaming_response.len();
     let streaming_lines = app.streaming_response.lines().count();
@@ -3403,7 +3423,7 @@ fn session_message_role_counts(
     let mut system = 0;
     let mut meta = 0;
     for message in messages {
-        match message.role {
+        match message.role() {
             SingleSessionRole::User => user += 1,
             SingleSessionRole::Assistant => assistant += 1,
             SingleSessionRole::Tool => tool += 1,
@@ -3708,20 +3728,20 @@ fn append_chat_message_lines(
     is_active_tool: bool,
     active_tool_input: Option<&str>,
 ) {
-    match message.role {
+    match message.role() {
         SingleSessionRole::User => {
-            append_user_lines(lines, *user_turn, message.content.trim());
+            append_user_lines(lines, *user_turn, message.content().trim());
             *user_turn += 1;
         }
-        SingleSessionRole::Assistant => append_assistant_lines(lines, message.content.trim()),
+        SingleSessionRole::Assistant => append_assistant_lines(lines, message.content().trim()),
         SingleSessionRole::Tool => append_tool_lines(
             lines,
-            message.content.trim(),
+            message.content().trim(),
             is_active_tool,
             active_tool_input,
         ),
         SingleSessionRole::System | SingleSessionRole::Meta => {
-            append_meta_lines(lines, message.content.trim())
+            append_meta_lines(lines, message.content().trim())
         }
     }
 }
@@ -4898,8 +4918,8 @@ fn append_tool_group_summary(
     let mut approx_tokens = 0usize;
 
     for message in tool_messages {
-        approx_tokens += message.content.chars().count().div_ceil(4);
-        let name = tool_summary_name(&message.content);
+        approx_tokens += message.content().chars().count().div_ceil(4);
+        let name = tool_summary_name(message.content());
         if let Some(index) = names.iter().position(|existing| existing == &name) {
             counts[index] += 1;
         } else {

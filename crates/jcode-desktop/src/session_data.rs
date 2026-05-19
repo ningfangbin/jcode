@@ -1,5 +1,9 @@
 use crate::workspace::SessionCard;
 use anyhow::{Context, Result};
+use jcode_tui_messages::{
+    TranscriptPreviewLabels, latest_user_transcript_preview, normalize_transcript_preview_text,
+    transcript_preview_lines,
+};
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 use std::fs;
@@ -249,32 +253,13 @@ fn stored_string(value: Option<&str>) -> Option<String> {
 }
 
 fn latest_user_preview(session: &StoredSession) -> Option<String> {
-    session
-        .messages
-        .iter()
-        .rev()
-        .find(|message| message.role.as_deref() == Some("user"))
-        .and_then(message_text_preview)
-}
-
-fn message_text_preview(message: &StoredMessage) -> Option<String> {
-    let mut text = String::new();
-    for block in &message.content {
-        let Some(block_text) = block.text.as_deref() else {
-            continue;
-        };
-        if !text.is_empty() {
-            text.push(' ');
-        }
-        text.push_str(block_text.trim());
-    }
-
-    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if normalized.is_empty() {
-        None
-    } else {
-        Some(truncate_chars(&normalized, 64))
-    }
+    let messages = transcript_preview_messages(&session.messages);
+    latest_user_transcript_preview(
+        messages
+            .iter()
+            .map(|(role, text)| (role.as_str(), text.as_str())),
+        64,
+    )
 }
 
 fn recent_message_preview_lines(
@@ -282,34 +267,38 @@ fn recent_message_preview_lines(
     limit: usize,
     char_limit: usize,
 ) -> Vec<String> {
-    let mut previews = messages
+    let messages = transcript_preview_messages(messages);
+    transcript_preview_lines(
+        messages
+            .iter()
+            .map(|(role, text)| (role.as_str(), text.as_str())),
+        limit,
+        char_limit,
+        TranscriptPreviewLabels::DESKTOP,
+    )
+}
+
+fn transcript_preview_messages(messages: &[StoredMessage]) -> Vec<(String, String)> {
+    messages
         .iter()
-        .rev()
-        .filter_map(|message| message_preview_line(message, char_limit))
-        .take(limit)
-        .collect::<Vec<_>>();
-    previews.reverse();
-    previews
+        .filter_map(|message| {
+            let role = match message.role.as_deref()? {
+                role @ ("user" | "assistant" | "system") => role.to_string(),
+                _ => return None,
+            };
+            let text = message_preview_text(message)?;
+            Some((role, text))
+        })
+        .collect()
 }
 
-fn message_preview_line(message: &StoredMessage, char_limit: usize) -> Option<String> {
-    let role = match message.role.as_deref()? {
-        "user" => "user",
-        "assistant" => "asst",
-        "system" => "sys",
-        _ => return None,
-    };
-    let text = message_preview_text(message, char_limit)?;
-    Some(format!("{role} {text}"))
-}
-
-fn message_preview_text(message: &StoredMessage, char_limit: usize) -> Option<String> {
+fn message_preview_text(message: &StoredMessage) -> Option<String> {
     let mut fragments = Vec::new();
     for block in &message.content {
         match block.block_type.as_deref() {
             Some("text") | None => {
                 if let Some(text) = block.text.as_deref() {
-                    let normalized = normalize_preview_text(text);
+                    let normalized = normalize_transcript_preview_text(text);
                     if !normalized.is_empty() {
                         fragments.push(normalized);
                     }
@@ -329,12 +318,8 @@ fn message_preview_text(message: &StoredMessage, char_limit: usize) -> Option<St
     if joined.is_empty() {
         None
     } else {
-        Some(truncate_chars(&joined, char_limit))
+        Some(joined)
     }
-}
-
-fn normalize_preview_text(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn short_session_name(id: &str) -> String {
