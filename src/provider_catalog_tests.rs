@@ -109,6 +109,27 @@ fn auth_issue_profile_metadata_matches_direct_provider_endpoints() {
 }
 
 #[test]
+fn minimax_token_plan_keys_resolve_to_china_endpoint_without_changing_international_default() {
+    let _lock = crate::storage::lock_test_env();
+    let _guard = EnvGuard::save(&["OPENAI_API_KEY"]);
+    crate::env::remove_var("OPENAI_API_KEY");
+
+    let international = resolve_openai_compatible_profile(MINIMAX_PROFILE);
+    assert_eq!(international.api_base, "https://api.minimax.io/v1");
+    assert_eq!(
+        international.setup_url,
+        "https://platform.minimax.io/docs/guides/text-generation"
+    );
+
+    let china = resolve_openai_compatible_profile_with_api_key_hint(
+        MINIMAX_PROFILE,
+        Some("sk-cp-test-token"),
+    );
+    assert_eq!(china.api_base, MINIMAX_CHINA_API_BASE);
+    assert_eq!(china.setup_url, MINIMAX_CHINA_SETUP_URL);
+}
+
+#[test]
 fn auth_issue_lan_openai_compatible_bases_are_valid_for_local_model_servers() {
     assert_eq!(
         normalize_api_base("http://100.103.78.84:11434/v1").as_deref(),
