@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use serde_json::json;
 use std::io::BufReader;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
@@ -17,9 +16,9 @@ use server_io::{
     DrainOutcome, connect_server_with_retry, connect_server_with_retry_path, drain_session_events,
     ensure_server_running, establish_session_id, read_history_reasoning_effort, read_model_catalog,
     read_model_changed, read_reasoning_effort_changed, subscribe_and_establish_session,
-    subscribe_to_server, write_json_line,
+    subscribe_to_server, validate_reload_socket_path, write_json_line,
 };
-use terminal::{compact_title, jcode_bin, launch_first_available_terminal, terminal_candidates};
+use terminal::{compact_title, launch_first_available_terminal, terminal_candidates};
 pub use terminal::{launch_validated_resume_session, validate_resume_session_id};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -126,16 +125,21 @@ pub fn send_message_to_session(session_id: &str, _title: &str, message: &str) ->
         anyhow::bail!("empty draft message");
     }
 
-    Command::new(jcode_bin())
-        .arg("--resume")
-        .arg(session_id)
-        .arg("run")
-        .arg(message)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .with_context(|| format!("failed to spawn jcode run for {session_id}"))?;
+    let session_id = session_id.to_string();
+    let message = message.to_string();
+    std::thread::Builder::new()
+        .name("jcode-desktop-workspace-message".to_string())
+        .spawn(move || {
+            let (_command_tx, command_rx) = mpsc::channel();
+            if let Err(error) =
+                run_server_session(Some(&session_id), &message, Vec::new(), None, command_rx)
+            {
+                crate::desktop_log::error(format_args!(
+                    "jcode-desktop: workspace server message failed session_id={session_id}: {error:#}"
+                ));
+            }
+        })
+        .context("failed to spawn desktop workspace message worker")?;
 
     Ok(())
 }
@@ -624,7 +628,7 @@ fn run_server_session(
             }
             DrainOutcome::Reloading { new_socket } => {
                 if let Some(path) = new_socket {
-                    current_socket_path = PathBuf::from(path);
+                    current_socket_path = validate_reload_socket_path(&current_socket_path, &path)?;
                 }
                 send_desktop_status(&event_tx, "server reloading, reconnecting");
             }
@@ -645,6 +649,11 @@ fn run_server_session(
             subscribe_request_id,
             event_tx.as_ref(),
         )?;
+        if reconnected_session_id != session_id {
+            anyhow::bail!(
+                "jcode server reconnected to unexpected session id: expected {session_id}, got {reconnected_session_id}"
+            );
+        }
         send_desktop_event(
             &event_tx,
             DesktopSessionEvent::Reloaded {
