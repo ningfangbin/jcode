@@ -4203,53 +4203,112 @@ pub(crate) fn push_streaming_activity_cue(
             single_session_draft_top_for_app(app, size) - typography.body_size * 0.82
         });
     let cue_x = PANEL_TITLE_LEFT_PADDING + typography.body_size * 0.08;
-    let phase = (tick % 24) as f32 / 24.0;
-    let pulse = 0.5 + 0.5 * (phase * std::f32::consts::TAU).sin();
+    let content_width = (size.width as f32 - PANEL_TITLE_LEFT_PADDING * 2.0).max(1.0);
+    let phase = (tick % 48) as f32 / 48.0;
+    let breathing = 0.5 + 0.5 * (phase * std::f32::consts::TAU).sin();
+    let sweep_width = (content_width * 0.36).clamp(96.0, 260.0);
+    let sweep_travel = (content_width - sweep_width).max(1.0);
+    let sweep_x = PANEL_TITLE_LEFT_PADDING + phase * sweep_travel;
+    let glow_y = cue_y + line_height * 0.12;
+    let glow_height = line_height * 0.76;
 
-    let mut beam_color = NATIVE_SPINNER_HEAD_COLOR;
-    beam_color[3] = if app.streaming_response.is_empty() {
-        0.22 + 0.24 * pulse
+    let glow_peak_alpha = if app.streaming_response.is_empty() {
+        0.055 + 0.030 * breathing
     } else {
-        0.36 + 0.34 * pulse
+        0.090 + 0.045 * breathing
+    };
+    let mut transparent_glow = STREAMING_ACTIVITY_GLOW_COLOR;
+    transparent_glow[3] = 0.0;
+    let mut glow = STREAMING_ACTIVITY_GLOW_COLOR;
+    glow[3] = glow_peak_alpha;
+    let half_sweep = sweep_width * 0.5;
+    push_gradient_rect(
+        vertices,
+        Rect {
+            x: sweep_x,
+            y: glow_y,
+            width: half_sweep,
+            height: glow_height,
+        },
+        transparent_glow,
+        transparent_glow,
+        glow,
+        glow,
+        size,
+    );
+    push_gradient_rect(
+        vertices,
+        Rect {
+            x: sweep_x + half_sweep,
+            y: glow_y,
+            width: half_sweep,
+            height: glow_height,
+        },
+        glow,
+        glow,
+        transparent_glow,
+        transparent_glow,
+        size,
+    );
+
+    let mut baseline_color = STREAMING_ACTIVITY_GLOW_COLOR;
+    baseline_color[3] = if app.streaming_response.is_empty() {
+        0.08
+    } else {
+        0.13
+    };
+    push_gradient_rect(
+        vertices,
+        Rect {
+            x: cue_x + 8.0,
+            y: cue_y + line_height * 0.86,
+            width: content_width * 0.42,
+            height: 1.4,
+        },
+        baseline_color,
+        baseline_color,
+        transparent_glow,
+        transparent_glow,
+        size,
+    );
+
+    let mut beam_halo_color = STREAMING_ACTIVITY_INK_COLOR;
+    beam_halo_color[3] = if app.streaming_response.is_empty() {
+        0.055 + 0.040 * breathing
+    } else {
+        0.090 + 0.055 * breathing
+    };
+    push_rounded_rect(
+        vertices,
+        Rect {
+            x: cue_x - 2.0,
+            y: cue_y + line_height * 0.10,
+            width: 7.0,
+            height: line_height * 0.80,
+        },
+        3.0,
+        beam_halo_color,
+        size,
+    );
+
+    let mut beam_color = STREAMING_ACTIVITY_INK_COLOR;
+    beam_color[3] = if app.streaming_response.is_empty() {
+        0.24 + 0.22 * breathing
+    } else {
+        0.36 + 0.30 * breathing
     };
     push_rounded_rect(
         vertices,
         Rect {
             x: cue_x,
             y: cue_y + line_height * 0.16,
-            width: 3.0,
+            width: 2.2,
             height: line_height * 0.68,
         },
-        1.5,
+        1.1,
         beam_color,
         size,
     );
-
-    let dot_radius = (typography.body_size * 0.12).clamp(2.0, 3.5);
-    let dot_y = cue_y + line_height * 0.50 - dot_radius;
-    let dot_start_x = cue_x + typography.body_size * 0.55;
-    for dot in 0..3 {
-        let dot_phase = ((tick + dot as u64 * 3) % 12) as f32 / 12.0;
-        let dot_pulse = 0.5 + 0.5 * (dot_phase * std::f32::consts::TAU).sin();
-        let mut dot_color = if app.streaming_response.is_empty() {
-            NATIVE_SPINNER_TRACK_COLOR
-        } else {
-            NATIVE_SPINNER_HEAD_COLOR
-        };
-        dot_color[3] = (0.30 + 0.58 * dot_pulse).clamp(0.24, 0.92);
-        push_rounded_rect(
-            vertices,
-            Rect {
-                x: dot_start_x + dot as f32 * dot_radius * 2.8,
-                y: dot_y,
-                width: dot_radius * 2.0,
-                height: dot_radius * 2.0,
-            },
-            dot_radius,
-            dot_color,
-            size,
-        );
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

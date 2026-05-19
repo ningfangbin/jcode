@@ -287,7 +287,7 @@ fn fresh_single_session_without_crashes_keeps_refresh_as_redraw() {
 fn single_session_active_work_uses_streaming_activity_cue_geometry() {
     let mut app = SingleSessionApp::new(None);
     let idle = build_single_session_vertices(&app, PhysicalSize::new(900, 700), 0.0, 0);
-    assert!(!vertices_have_rgb(&idle, NATIVE_SPINNER_HEAD_COLOR));
+    assert!(!vertices_have_rgb(&idle, STREAMING_ACTIVITY_INK_COLOR));
 
     app.apply_session_event(session_launch::DesktopSessionEvent::TextDelta(
         "streaming".to_string(),
@@ -295,11 +295,11 @@ fn single_session_active_work_uses_streaming_activity_cue_geometry() {
     let tick_zero = build_single_session_vertices(&app, PhysicalSize::new(900, 700), 0.0, 0);
     let tick_one = build_single_session_vertices(&app, PhysicalSize::new(900, 700), 0.0, 1);
 
-    assert!(vertices_have_rgb(&tick_zero, NATIVE_SPINNER_HEAD_COLOR));
-    assert!(vertices_have_rgb(&tick_one, NATIVE_SPINNER_HEAD_COLOR));
+    assert!(vertices_have_rgb(&tick_zero, STREAMING_ACTIVITY_INK_COLOR));
+    assert!(vertices_have_rgb(&tick_one, STREAMING_ACTIVITY_INK_COLOR));
     assert_ne!(
-        colors_for_rgb(&tick_zero, NATIVE_SPINNER_HEAD_COLOR),
-        colors_for_rgb(&tick_one, NATIVE_SPINNER_HEAD_COLOR)
+        colors_for_rgb(&tick_zero, STREAMING_ACTIVITY_INK_COLOR),
+        colors_for_rgb(&tick_one, STREAMING_ACTIVITY_INK_COLOR)
     );
 }
 
@@ -3949,7 +3949,7 @@ fn fresh_submit_keeps_single_visual_timeline_without_transcript_greeting() {
     assert_visual_text_contains(&key, &key.welcome_hero);
     assert!(vertices_have_color(&vertices, WELCOME_AURORA_BLUE));
     assert_runtime_welcome_hero_available(&app, size);
-    assert!(vertices_have_color(&vertices, NATIVE_SPINNER_HEAD_COLOR));
+    assert!(vertices_have_rgb(&vertices, STREAMING_ACTIVITY_INK_COLOR));
     assert!(
         key.body
             .iter()
