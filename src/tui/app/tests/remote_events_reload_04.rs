@@ -698,6 +698,7 @@ fn test_debug_command_message_respects_queue_mode() {
     let mut app = create_test_app();
 
     // Test 1: When not processing, should submit directly
+    let initial_session_messages = app.session.messages.len();
     app.is_processing = false;
     let result = app.handle_debug_command("message:hello");
     assert!(
@@ -710,7 +711,15 @@ fn test_debug_command_message_respects_queue_mode() {
     assert!(app.pending_turn);
     assert_eq!(app.messages.len(), 0);
     assert_eq!(app.display_messages.len(), 1);
-    assert_eq!(app.session.messages.len(), 1);
+    assert_eq!(app.session.messages.len(), initial_session_messages + 1);
+    let submitted_message = app
+        .session
+        .messages
+        .last()
+        .expect("submitted debug message should be stored");
+    assert_eq!(submitted_message.role, crate::message::Role::User);
+    assert_eq!(submitted_message.display_role, None);
+    assert_eq!(submitted_message.content_preview(), "hello");
 
     // Reset for next test
     app.pending_turn = false;
