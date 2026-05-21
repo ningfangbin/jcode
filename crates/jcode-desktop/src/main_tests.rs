@@ -2497,6 +2497,14 @@ fn single_session_visual_state_smoke_covers_markdown_spinner_and_switcher() {
     let markdown_vertices = build_single_session_vertices(&markdown_app, size, 0.0, 0);
     assert!(vertices_have_color(
         &markdown_vertices,
+        COMPOSER_INPUT_BACKGROUND_COLOR
+    ));
+    assert!(vertices_have_color(
+        &markdown_vertices,
+        COMPOSER_INPUT_BORDER_COLOR
+    ));
+    assert!(vertices_have_color(
+        &markdown_vertices,
         QUOTE_CARD_BACKGROUND_COLOR
     ));
     assert!(vertices_have_color(
