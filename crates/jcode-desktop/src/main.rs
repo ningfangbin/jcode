@@ -32,6 +32,11 @@ use desktop_app_driver::{
 };
 use desktop_benchmark::*;
 use desktop_config::*;
+use desktop_ipc::{DesktopHostToWorkerEnvelope, write_desktop_ipc_frame};
+use desktop_protocol::{
+    DesktopProtocolEnvelope, DesktopWorkerMode, DesktopWorkerReady, DesktopWorkerShutdownReason,
+    DesktopWorkerToHostMessage,
+};
 use desktop_scene::{
     DesktopColor, DesktopDisplayCommand, DesktopRect as DesktopSceneRect, DesktopRectPaint,
     DesktopScene,
@@ -70,7 +75,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::hash::{Hash, Hasher};
-use std::io::Write;
+use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -503,6 +508,9 @@ async fn run() -> Result<()> {
     let desktop_gallery = desktop_gallery_state.is_some();
     let process_role = desktop_process_role_from_args(args.iter().map(String::as_str));
     let desktop_mode = desktop_mode_from_args(args.iter().map(String::as_str));
+    if process_role == DesktopProcessRole::AppWorker {
+        return run_desktop_app_worker_process(desktop_mode);
+    }
     let resume_session_id = desktop_resume_session_id_from_args(args.iter().map(String::as_str));
     let desktop_reload_startup = DesktopReloadStartup::from_env();
     emit_desktop_profile_event(
@@ -4486,6 +4494,56 @@ impl DesktopMode {
             Self::WorkspacePrototype => "workspace",
         }
     }
+
+    fn worker_mode(self) -> DesktopWorkerMode {
+        match self {
+            Self::SingleSession => DesktopWorkerMode::SingleSession,
+            Self::WorkspacePrototype => DesktopWorkerMode::Workspace,
+        }
+    }
+}
+
+fn run_desktop_app_worker_process(desktop_mode: DesktopMode) -> Result<()> {
+    desktop_log::info(format_args!(
+        "jcode-desktop: app worker process started; pid={}",
+        std::process::id()
+    ));
+
+    let mut stdout = std::io::stdout().lock();
+    let ready = DesktopProtocolEnvelope::new(
+        1,
+        DesktopWorkerToHostMessage::Ready(DesktopWorkerReady {
+            worker_pid: std::process::id(),
+            mode: desktop_mode.worker_mode(),
+        }),
+    );
+    write_desktop_ipc_frame(&mut stdout, &ready).context("failed to write worker ready frame")?;
+
+    let stdin = std::io::stdin();
+    let mut reader = BufReader::new(stdin.lock());
+    loop {
+        let frame: Option<DesktopHostToWorkerEnvelope> =
+            desktop_ipc::read_desktop_ipc_frame(&mut reader)
+                .context("failed to read host frame")?;
+        let Some(frame) = frame else {
+            break;
+        };
+        frame
+            .validate_version()
+            .context("host sent incompatible protocol frame")?;
+        if matches!(
+            frame.payload,
+            desktop_protocol::DesktopHostToWorkerMessage::Shutdown {
+                reason: DesktopWorkerShutdownReason::HostExit
+                    | DesktopWorkerShutdownReason::Reload
+                    | DesktopWorkerShutdownReason::ProtocolMismatch
+            }
+        ) {
+            break;
+        }
+    }
+
+    Ok(())
 }
 
 fn desktop_mode_from_args<'a>(args: impl IntoIterator<Item = &'a str>) -> DesktopMode {

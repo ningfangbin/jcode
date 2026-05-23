@@ -77,6 +77,18 @@ fn desktop_process_role_parses_internal_flags() {
 }
 
 #[test]
+fn desktop_modes_map_to_worker_modes() {
+    assert_eq!(
+        DesktopMode::SingleSession.worker_mode(),
+        DesktopWorkerMode::SingleSession
+    );
+    assert_eq!(
+        DesktopMode::WorkspacePrototype.worker_mode(),
+        DesktopWorkerMode::Workspace
+    );
+}
+
+#[test]
 fn desktop_app_worker_relaunch_replaces_existing_process_role() {
     let relaunch = DesktopRelaunch {
         binary: PathBuf::from("/tmp/jcode-desktop"),
