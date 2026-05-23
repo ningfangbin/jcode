@@ -3,26 +3,79 @@
 use crate::desktop_scene::DesktopScene;
 use crate::session_launch;
 use crate::workspace::KeyOutcome;
+use serde::{Deserialize, Serialize};
 
 pub(crate) const DESKTOP_UI_SNAPSHOT_VERSION: u16 = 1;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct DesktopUiSnapshot {
     pub(crate) version: u16,
-    pub(crate) mode: &'static str,
+    pub(crate) mode: String,
     pub(crate) title: String,
     pub(crate) live_session_id: Option<String>,
+    pub(crate) surface: DesktopSurfaceSnapshot,
 }
 
 impl DesktopUiSnapshot {
-    pub(crate) fn new(mode: &'static str, title: String, live_session_id: Option<String>) -> Self {
+    pub(crate) fn new(
+        mode: impl Into<String>,
+        title: String,
+        live_session_id: Option<String>,
+        surface: DesktopSurfaceSnapshot,
+    ) -> Self {
         Self {
             version: DESKTOP_UI_SNAPSHOT_VERSION,
-            mode,
+            mode: mode.into(),
             title,
             live_session_id,
+            surface,
         }
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) enum DesktopSurfaceSnapshot {
+    SingleSession(DesktopSingleSessionSnapshot),
+    Workspace(DesktopWorkspaceSnapshot),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct DesktopSingleSessionSnapshot {
+    pub(crate) session_title: Option<String>,
+    pub(crate) draft: String,
+    pub(crate) draft_cursor: usize,
+    pub(crate) body_scroll_millis: i32,
+    pub(crate) detail_scroll: usize,
+    pub(crate) show_help: bool,
+    pub(crate) show_session_info: bool,
+    pub(crate) pending_image_count: usize,
+    pub(crate) model_picker_open: bool,
+    pub(crate) session_switcher_open: bool,
+    pub(crate) stdin_response_active: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct DesktopWorkspaceSnapshot {
+    pub(crate) input_mode: String,
+    pub(crate) focused_surface_id: u64,
+    pub(crate) focused_session_id: Option<String>,
+    pub(crate) zoomed: bool,
+    pub(crate) detail_scroll: usize,
+    pub(crate) draft: String,
+    pub(crate) draft_cursor: usize,
+    pub(crate) pending_image_count: usize,
+    pub(crate) surfaces: Vec<DesktopWorkspaceSurfaceSnapshot>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct DesktopWorkspaceSurfaceSnapshot {
+    pub(crate) id: u64,
+    pub(crate) kind: String,
+    pub(crate) title: String,
+    pub(crate) session_id: Option<String>,
+    pub(crate) lane: i32,
+    pub(crate) column: i32,
+    pub(crate) color_index: usize,
 }
 
 pub(crate) struct DesktopSceneBuildContext {
@@ -57,7 +110,7 @@ pub(crate) trait DesktopAppDriver {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum DesktopSnapshotRestoreError {
     UnsupportedVersion { version: u16 },
-    UnsupportedMode { mode: &'static str },
+    UnsupportedMode { mode: String },
 }
 
 impl std::fmt::Display for DesktopSnapshotRestoreError {
@@ -76,3 +129,70 @@ impl std::fmt::Display for DesktopSnapshotRestoreError {
 impl std::error::Error for DesktopSnapshotRestoreError {}
 
 pub(crate) type DesktopKeyDriverOutcome = KeyOutcome;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ui_snapshot_round_trips_single_session_surface() {
+        let snapshot = DesktopUiSnapshot::new(
+            "single_session",
+            "Jcode".to_string(),
+            Some("session-1".to_string()),
+            DesktopSurfaceSnapshot::SingleSession(DesktopSingleSessionSnapshot {
+                session_title: Some("active session".to_string()),
+                draft: "hello".to_string(),
+                draft_cursor: 5,
+                body_scroll_millis: 1500,
+                detail_scroll: 3,
+                show_help: true,
+                show_session_info: false,
+                pending_image_count: 2,
+                model_picker_open: true,
+                session_switcher_open: false,
+                stdin_response_active: true,
+            }),
+        );
+
+        let encoded = serde_json::to_string(&snapshot).expect("serialize snapshot");
+        let decoded: DesktopUiSnapshot =
+            serde_json::from_str(&encoded).expect("deserialize snapshot");
+
+        assert_eq!(decoded, snapshot);
+    }
+
+    #[test]
+    fn ui_snapshot_round_trips_workspace_surface() {
+        let snapshot = DesktopUiSnapshot::new(
+            "workspace",
+            "Workspace".to_string(),
+            None,
+            DesktopSurfaceSnapshot::Workspace(DesktopWorkspaceSnapshot {
+                input_mode: "Normal".to_string(),
+                focused_surface_id: 42,
+                focused_session_id: Some("session-2".to_string()),
+                zoomed: true,
+                detail_scroll: 7,
+                draft: "workspace draft".to_string(),
+                draft_cursor: 9,
+                pending_image_count: 1,
+                surfaces: vec![DesktopWorkspaceSurfaceSnapshot {
+                    id: 42,
+                    kind: "Session".to_string(),
+                    title: "worker".to_string(),
+                    session_id: Some("session-2".to_string()),
+                    lane: 1,
+                    column: 2,
+                    color_index: 3,
+                }],
+            }),
+        );
+
+        let encoded = serde_json::to_string(&snapshot).expect("serialize snapshot");
+        let decoded: DesktopUiSnapshot =
+            serde_json::from_str(&encoded).expect("deserialize snapshot");
+
+        assert_eq!(decoded, snapshot);
+    }
+}

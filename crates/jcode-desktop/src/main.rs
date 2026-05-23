@@ -24,7 +24,8 @@ use base64::Engine;
 use bytemuck::{Pod, Zeroable};
 use desktop_app_driver::{
     DESKTOP_UI_SNAPSHOT_VERSION, DesktopAppDriver, DesktopSceneBuildContext,
-    DesktopSnapshotRestoreError, DesktopUiSnapshot,
+    DesktopSingleSessionSnapshot, DesktopSnapshotRestoreError, DesktopSurfaceSnapshot,
+    DesktopUiSnapshot, DesktopWorkspaceSnapshot, DesktopWorkspaceSurfaceSnapshot,
 };
 use desktop_benchmark::*;
 use desktop_config::*;
@@ -6045,6 +6046,7 @@ impl DesktopAppDriver for DesktopApp {
             DesktopApp::mode(self),
             DesktopApp::status_title(self),
             DesktopApp::single_session_live_id(self),
+            desktop_surface_snapshot(self),
         )
     }
 
@@ -6063,6 +6065,59 @@ impl DesktopAppDriver for DesktopApp {
             });
         }
         Ok(())
+    }
+}
+
+fn desktop_surface_snapshot(app: &DesktopApp) -> DesktopSurfaceSnapshot {
+    match app {
+        DesktopApp::SingleSession(single_session) => {
+            DesktopSurfaceSnapshot::SingleSession(DesktopSingleSessionSnapshot {
+                session_title: single_session
+                    .session
+                    .as_ref()
+                    .map(|session| session.title.clone()),
+                draft: single_session.draft.clone(),
+                draft_cursor: single_session.draft_cursor,
+                body_scroll_millis: (single_session.body_scroll_lines * 1000.0).round() as i32,
+                detail_scroll: single_session.detail_scroll,
+                show_help: single_session.show_help,
+                show_session_info: single_session.show_session_info,
+                pending_image_count: single_session.pending_images.len(),
+                model_picker_open: single_session.model_picker.open,
+                session_switcher_open: single_session.session_switcher.open,
+                stdin_response_active: single_session.stdin_response.is_some(),
+            })
+        }
+        DesktopApp::Workspace(workspace) => {
+            let focused_session_id = workspace
+                .surfaces
+                .iter()
+                .find(|surface| surface.id == workspace.focused_id)
+                .and_then(|surface| surface.session_id.clone());
+            DesktopSurfaceSnapshot::Workspace(DesktopWorkspaceSnapshot {
+                input_mode: format!("{:?}", workspace.mode),
+                focused_surface_id: workspace.focused_id,
+                focused_session_id,
+                zoomed: workspace.zoomed,
+                detail_scroll: workspace.detail_scroll,
+                draft: workspace.draft.clone(),
+                draft_cursor: workspace.draft_cursor,
+                pending_image_count: workspace.pending_images.len(),
+                surfaces: workspace
+                    .surfaces
+                    .iter()
+                    .map(|surface| DesktopWorkspaceSurfaceSnapshot {
+                        id: surface.id,
+                        kind: format!("{:?}", surface.kind),
+                        title: surface.title.clone(),
+                        session_id: surface.session_id.clone(),
+                        lane: surface.lane,
+                        column: surface.column,
+                        color_index: surface.color_index,
+                    })
+                    .collect(),
+            })
+        }
     }
 }
 
