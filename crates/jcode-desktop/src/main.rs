@@ -36,8 +36,9 @@ use desktop_ipc::{DesktopHostToWorkerEnvelope, write_desktop_ipc_frame};
 use desktop_protocol::{
     DesktopHostToWorkerMessage, DesktopInputEvent, DesktopKeyEvent, DesktopKeyModifiers,
     DesktopMouseButton, DesktopMouseEvent, DesktopProtocolEnvelope, DesktopSceneUpdate,
-    DesktopWindowEvent, DesktopWindowState, DesktopWorkerInit, DesktopWorkerMode,
-    DesktopWorkerReady, DesktopWorkerShutdownReason, DesktopWorkerToHostMessage,
+    DesktopSessionEventBatchWire, DesktopSessionEventWire, DesktopWindowEvent, DesktopWindowState,
+    DesktopWorkerInit, DesktopWorkerMode, DesktopWorkerReady, DesktopWorkerShutdownReason,
+    DesktopWorkerToHostMessage,
 };
 use desktop_scene::{
     DesktopColor, DesktopDisplayCommand, DesktopRect as DesktopSceneRect, DesktopRectPaint,
@@ -1529,6 +1530,7 @@ async fn run() -> Result<()> {
                 let raw_event_count = batch.raw_event_count;
                 let raw_payload_bytes = batch.raw_payload_bytes;
                 let forwarded_at = batch.forwarded_at;
+                forward_desktop_session_event_batch_to_worker(&mut hot_reloader, &batch);
                 let apply_stats = apply_desktop_session_event_batch_with_stats(&mut app, batch.events);
                 let ui_queue_delay = ui_received_at.saturating_duration_since(forwarded_at);
                 let mut redraw_requested = false;
@@ -5051,10 +5053,14 @@ impl DesktopHotReloader {
     }
 
     fn send_app_worker_input(&mut self, input: DesktopInputEvent) -> Result<()> {
+        self.send_app_worker_message(DesktopHostToWorkerMessage::Input(input))
+    }
+
+    fn send_app_worker_message(&mut self, message: DesktopHostToWorkerMessage) -> Result<()> {
         let Some(worker) = self.app_worker.as_mut() else {
             return Ok(());
         };
-        worker.send(DesktopHostToWorkerMessage::Input(input))
+        worker.send(message)
     }
 
     fn poll(&mut self, app: &DesktopApp, window: &Window) -> bool {
@@ -5469,6 +5475,95 @@ fn forward_app_worker_input(hot_reloader: &mut DesktopHotReloader, input: Deskto
         desktop_log::error(format_args!(
             "jcode-desktop: failed to forward input to app worker: {error:#}"
         ));
+    }
+}
+
+fn forward_desktop_session_event_batch_to_worker(
+    hot_reloader: &mut DesktopHotReloader,
+    batch: &DesktopSessionEventBatch,
+) {
+    if !hot_reloader.has_app_worker() {
+        return;
+    }
+    let wire = DesktopSessionEventBatchWire {
+        events: batch
+            .events
+            .iter()
+            .map(desktop_session_event_to_wire)
+            .collect(),
+        raw_event_count: batch.raw_event_count,
+        raw_payload_bytes: batch.raw_payload_bytes,
+    };
+    if let Err(error) =
+        hot_reloader.send_app_worker_message(DesktopHostToWorkerMessage::SessionEvents(wire))
+    {
+        desktop_log::error(format_args!(
+            "jcode-desktop: failed to forward session events to app worker: {error:#}"
+        ));
+    }
+}
+
+fn desktop_session_event_to_wire(
+    event: &session_launch::DesktopSessionEvent,
+) -> DesktopSessionEventWire {
+    match event {
+        session_launch::DesktopSessionEvent::Status(status) => DesktopSessionEventWire::Status {
+            message: status.label(),
+        },
+        session_launch::DesktopSessionEvent::TextDelta(text)
+        | session_launch::DesktopSessionEvent::TextReplace(text) => {
+            DesktopSessionEventWire::AssistantTextDelta { text: text.clone() }
+        }
+        session_launch::DesktopSessionEvent::ToolStarted { id, name }
+        | session_launch::DesktopSessionEvent::ToolExecuting { id, name } => {
+            DesktopSessionEventWire::ToolStarted {
+                id: id.clone().unwrap_or_default(),
+                title: name.clone(),
+            }
+        }
+        session_launch::DesktopSessionEvent::ToolFinished {
+            id, name, is_error, ..
+        } => DesktopSessionEventWire::ToolFinished {
+            id: id.clone().unwrap_or_default(),
+            title: name.clone(),
+            success: !*is_error,
+        },
+        session_launch::DesktopSessionEvent::Error(message) => DesktopSessionEventWire::Error {
+            message: message.clone(),
+        },
+        other => DesktopSessionEventWire::RawJson {
+            event_type: desktop_session_event_type_name(other).to_string(),
+            payload: format!("{other:?}"),
+        },
+    }
+}
+
+fn desktop_session_event_type_name(event: &session_launch::DesktopSessionEvent) -> &'static str {
+    match event {
+        session_launch::DesktopSessionEvent::Status(_) => "status",
+        session_launch::DesktopSessionEvent::SessionStarted { .. } => "session_started",
+        session_launch::DesktopSessionEvent::SessionRenamed { .. } => "session_renamed",
+        session_launch::DesktopSessionEvent::TextDelta(_) => "text_delta",
+        session_launch::DesktopSessionEvent::TextReplace(_) => "text_replace",
+        session_launch::DesktopSessionEvent::ToolStarted { .. } => "tool_started",
+        session_launch::DesktopSessionEvent::ToolExecuting { .. } => "tool_executing",
+        session_launch::DesktopSessionEvent::ToolInput { .. } => "tool_input",
+        session_launch::DesktopSessionEvent::ToolFinished { .. } => "tool_finished",
+        session_launch::DesktopSessionEvent::ModelChanged { .. } => "model_changed",
+        session_launch::DesktopSessionEvent::ModelCatalog { .. } => "model_catalog",
+        session_launch::DesktopSessionEvent::ModelCatalogError { .. } => "model_catalog_error",
+        session_launch::DesktopSessionEvent::StdinRequest { .. } => "stdin_request",
+        session_launch::DesktopSessionEvent::ReloadProgress { .. } => "reload_progress",
+        session_launch::DesktopSessionEvent::RuntimeMetadata { .. } => "runtime_metadata",
+        session_launch::DesktopSessionEvent::TokenUsage { .. } => "token_usage",
+        session_launch::DesktopSessionEvent::SystemNotice { .. } => "system_notice",
+        session_launch::DesktopSessionEvent::SessionCloseRequested { .. } => {
+            "session_close_requested"
+        }
+        session_launch::DesktopSessionEvent::Reloading { .. } => "reloading",
+        session_launch::DesktopSessionEvent::Reloaded { .. } => "reloaded",
+        session_launch::DesktopSessionEvent::Done => "done",
+        session_launch::DesktopSessionEvent::Error(_) => "error",
     }
 }
 

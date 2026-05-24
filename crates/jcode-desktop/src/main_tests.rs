@@ -172,6 +172,33 @@ fn desktop_mouse_wheel_events_convert_line_and_pixel_delta() {
 }
 
 #[test]
+fn desktop_session_events_convert_to_worker_wire_events() {
+    assert_eq!(
+        desktop_session_event_to_wire(&session_launch::DesktopSessionEvent::Status(
+            DesktopSessionStatus::external("thinking"),
+        )),
+        DesktopSessionEventWire::Status {
+            message: "thinking".to_string(),
+        }
+    );
+    assert_eq!(
+        desktop_session_event_to_wire(&session_launch::DesktopSessionEvent::TextDelta(
+            "hello".to_string(),
+        )),
+        DesktopSessionEventWire::AssistantTextDelta {
+            text: "hello".to_string(),
+        }
+    );
+    assert_eq!(
+        desktop_session_event_to_wire(&session_launch::DesktopSessionEvent::Done),
+        DesktopSessionEventWire::RawJson {
+            event_type: "done".to_string(),
+            payload: "Done".to_string(),
+        }
+    );
+}
+
+#[test]
 fn desktop_app_worker_relaunch_replaces_existing_process_role() {
     let relaunch = DesktopRelaunch {
         binary: PathBuf::from("/tmp/jcode-desktop"),
