@@ -1319,12 +1319,17 @@ async fn run() -> Result<()> {
                             let target_session_id = app.single_session_live_id();
                             match app.preview_single_session_reasoning_effort_set(&effort) {
                                 Some(effort) => {
-                                    if let Err(error) = reasoning_effort_queue.request(
-                                        effort,
-                                        target_session_id,
-                                        session_event_tx.clone(),
-                                    ) {
-                                        apply_single_session_error(&mut app, error);
+                                    if app
+                                        .set_reasoning_effort_via_active_session(effort.clone())
+                                        .is_err()
+                                    {
+                                        if let Err(error) = reasoning_effort_queue.request(
+                                            effort,
+                                            target_session_id,
+                                            session_event_tx.clone(),
+                                        ) {
+                                            apply_single_session_error(&mut app, error);
+                                        }
                                     }
                                 }
                                 None => app.set_single_session_status_label(
@@ -6154,6 +6159,15 @@ impl DesktopApp {
         match self {
             Self::SingleSession(app) => app.preview_reasoning_effort_set(effort),
             Self::Workspace(_) => None,
+        }
+    }
+
+    fn set_reasoning_effort_via_active_session(&mut self, effort: String) -> anyhow::Result<()> {
+        match self {
+            Self::SingleSession(app) => app.set_reasoning_effort_via_active_session(effort),
+            Self::Workspace(_) => {
+                anyhow::bail!("reasoning effort changes require single-session mode")
+            }
         }
     }
 

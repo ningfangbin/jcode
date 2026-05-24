@@ -340,12 +340,19 @@ impl DesktopSessionHandle {
             .send(DesktopSessionCommand::StdinResponse { request_id, input })
             .context("failed to send stdin response to desktop session worker")
     }
+
+    pub fn set_reasoning_effort(&self, effort: String) -> Result<()> {
+        self.command_tx
+            .send(DesktopSessionCommand::SetReasoningEffort { effort })
+            .context("failed to send reasoning effort change to desktop session worker")
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum DesktopSessionCommand {
     Cancel,
     StdinResponse { request_id: String, input: String },
+    SetReasoningEffort { effort: String },
 }
 
 pub fn launch_resume_session(session_id: &str, title: &str) -> Result<()> {

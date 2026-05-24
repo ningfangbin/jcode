@@ -402,6 +402,21 @@ fn desktop_session_handle_sends_stdin_response_command() {
 }
 
 #[test]
+fn desktop_session_handle_sends_reasoning_effort_command() {
+    let (command_tx, command_rx) = mpsc::channel();
+    let handle = DesktopSessionHandle { command_tx };
+
+    handle.set_reasoning_effort("high".to_string()).unwrap();
+
+    assert_eq!(
+        command_rx.try_recv(),
+        Ok(DesktopSessionCommand::SetReasoningEffort {
+            effort: "high".to_string()
+        })
+    );
+}
+
+#[test]
 fn desktop_session_worker_slots_are_bounded_and_released() -> Result<()> {
     let counter = AtomicUsize::new(0);
     let first = try_acquire_desktop_session_worker_slot(&counter, 2)?;

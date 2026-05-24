@@ -869,6 +869,17 @@ pub(super) fn drain_worker_commands(
                 )?;
                 *next_request_id += 1;
             }
+            DesktopSessionCommand::SetReasoningEffort { effort } => {
+                write_json_line(
+                    writer,
+                    json!({
+                        "type": "set_reasoning_effort",
+                        "id": *next_request_id,
+                        "effort": effort,
+                    }),
+                )?;
+                *next_request_id += 1;
+            }
         }
     }
     Ok(cancel_request_ids)

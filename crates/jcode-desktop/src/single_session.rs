@@ -3920,6 +3920,16 @@ impl SingleSessionApp {
         Ok(())
     }
 
+    pub(crate) fn set_reasoning_effort_via_active_session(
+        &mut self,
+        effort: String,
+    ) -> anyhow::Result<()> {
+        let Some(handle) = &self.runtime.session_handle else {
+            anyhow::bail!("no active desktop session to receive reasoning effort change");
+        };
+        handle.set_reasoning_effort(effort)
+    }
+
     fn queue_draft(&mut self) -> KeyOutcome {
         let message = self.draft.trim().to_string();
         if message.is_empty() && self.pending_images.is_empty() {
