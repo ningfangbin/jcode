@@ -1401,6 +1401,35 @@ fn hash_text_cache_fingerprint<H: Hasher>(text: &str, hasher: &mut H) {
     bytes[bytes.len() - BODY_CACHE_TEXT_EDGE_BYTES..].hash(hasher);
 }
 
+fn hash_tool_cache_fingerprint<H: Hasher>(tool: &SingleSessionToolState, hasher: &mut H) {
+    tool.active_message_index.hash(hasher);
+    tool.active_call_id.hash(hasher);
+    visible_active_tool_input_preview(tool).hash(hasher);
+    for run in &tool.runs {
+        run.call_id.hash(hasher);
+        run.message_index.hash(hasher);
+        run.name.hash(hasher);
+        run.state.hash(hasher);
+        run.summary.hash(hasher);
+        run.input_preview.hash(hasher);
+        run.stdin_prompt.hash(hasher);
+    }
+}
+
+fn visible_active_tool_input_preview(tool: &SingleSessionToolState) -> Option<String> {
+    if tool.input_buffer.is_empty() {
+        return None;
+    }
+    let tool_name = tool
+        .active_call_id
+        .as_ref()
+        .and_then(|call_id| tool.runs.iter().find(|run| &run.call_id == call_id))
+        .or_else(|| tool.runs.last())
+        .map(|run| run.name.as_str())
+        .unwrap_or("tool");
+    compact_tool_metadata(&formatted_tool_input_lines(tool_name, &tool.input_buffer))
+}
+
 fn hash_session_switcher_cache_state<H: Hasher>(switcher: &SessionSwitcherState, hasher: &mut H) {
     switcher.open.hash(hasher);
     switcher.loading.hash(hasher);
@@ -3330,11 +3359,7 @@ impl SingleSessionApp {
             .hash(&mut hasher);
         hash_messages_cache_fingerprint(&self.messages, &mut hasher);
         hash_text_cache_fingerprint(&self.streaming_response, &mut hasher);
-        self.tool.active_message_index.hash(&mut hasher);
-        self.tool.active_call_id.hash(&mut hasher);
-        hash_text_cache_fingerprint(&self.tool.input_buffer, &mut hasher);
-        self.tool.event_sequence.hash(&mut hasher);
-        self.tool.runs.hash(&mut hasher);
+        hash_tool_cache_fingerprint(&self.tool, &mut hasher);
         self.status.hash(&mut hasher);
         self.error.hash(&mut hasher);
         self.show_help.hash(&mut hasher);
@@ -3369,11 +3394,7 @@ impl SingleSessionApp {
             })
             .hash(&mut hasher);
         hash_messages_cache_fingerprint(&self.messages, &mut hasher);
-        self.tool.active_message_index.hash(&mut hasher);
-        self.tool.active_call_id.hash(&mut hasher);
-        hash_text_cache_fingerprint(&self.tool.input_buffer, &mut hasher);
-        self.tool.event_sequence.hash(&mut hasher);
-        self.tool.runs.hash(&mut hasher);
+        hash_tool_cache_fingerprint(&self.tool, &mut hasher);
         self.status.hash(&mut hasher);
         self.error.hash(&mut hasher);
         self.show_help.hash(&mut hasher);
@@ -8061,12 +8082,32 @@ fn is_sensitive_tool_input_key(key: &str) -> bool {
 }
 
 fn compact_tool_text(text: &str, max_chars: usize) -> String {
-    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if text.chars().count() > max_chars {
-        format!("{}…", text.chars().take(max_chars).collect::<String>())
-    } else {
-        text
+    let mut compacted = String::new();
+    let mut chars = 0usize;
+    let mut first_word = true;
+
+    for word in text.split_whitespace() {
+        if first_word {
+            first_word = false;
+        } else if chars == max_chars {
+            compacted.push('…');
+            return compacted;
+        } else {
+            compacted.push(' ');
+            chars += 1;
+        }
+
+        for ch in word.chars() {
+            if chars == max_chars {
+                compacted.push('…');
+                return compacted;
+            }
+            compacted.push(ch);
+            chars += 1;
+        }
     }
+
+    compacted
 }
 
 fn normalized_tool_call_id(id: Option<String>) -> Option<String> {
@@ -8587,6 +8628,51 @@ mod tests {
         assert_eq!(lines, vec!["input: chunk-0 chunk-1 chunk-2"]);
         assert!(!looks_like_json_value("chunk-0"));
         assert!(looks_like_json_value("{\"command\":\"cargo test\"}"));
+    }
+
+    #[test]
+    fn active_tool_cache_key_ignores_input_suffix_after_visible_preview_stabilizes() {
+        let mut app = SingleSessionApp::new(None);
+        app.apply_session_event(DesktopSessionEvent::ToolStarted {
+            id: Some("tool-a".to_string()),
+            name: "bash".to_string(),
+        });
+        app.apply_session_event(DesktopSessionEvent::ToolExecuting {
+            id: Some("tool-a".to_string()),
+            name: "bash".to_string(),
+        });
+        app.apply_session_event(DesktopSessionEvent::ToolInput {
+            id: Some("tool-a".to_string()),
+            delta: "a".repeat(160),
+        });
+
+        let body_before = app.body_lines();
+        let body_key_before = app.rendered_body_cache_key((900, 700));
+        let static_key_before = app.rendered_body_static_cache_key((900, 700));
+
+        app.apply_session_event(DesktopSessionEvent::ToolInput {
+            id: Some("tool-a".to_string()),
+            delta: "b".repeat(40),
+        });
+
+        assert_eq!(app.body_lines(), body_before);
+        assert_eq!(app.rendered_body_cache_key((900, 700)), body_key_before);
+        assert_eq!(
+            app.rendered_body_static_cache_key((900, 700)),
+            static_key_before
+        );
+    }
+
+    #[test]
+    fn compact_tool_text_collapses_whitespace_and_stops_after_visible_prefix() {
+        assert_eq!(
+            compact_tool_text("  alpha\n\tbeta   gamma  ", 32),
+            "alpha beta gamma"
+        );
+        assert_eq!(compact_tool_text("alpha beta gamma", 10), "alpha beta…");
+        assert_eq!(compact_tool_text("你好 世界 again", 5), "你好 世界…");
+        assert_eq!(compact_tool_text("alpha", 0), "…");
+        assert_eq!(compact_tool_text("   ", 0), "");
     }
 
     #[test]
