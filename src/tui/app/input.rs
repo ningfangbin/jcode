@@ -621,6 +621,66 @@ pub(super) fn handle_text_input(app: &mut App, text: &str) -> bool {
     true
 }
 
+fn visible_prompt_history(app: &App) -> Vec<String> {
+    app.display_messages
+        .iter()
+        .filter(|message| message.role == "user")
+        .map(|message| message.content.trim().to_string())
+        .filter(|content| !content.is_empty())
+        .collect()
+}
+
+pub(super) fn handle_prompt_history_navigation(
+    app: &mut App,
+    code: KeyCode,
+    modifiers: KeyModifiers,
+) -> bool {
+    if !modifiers.is_empty() || !matches!(code, KeyCode::Up | KeyCode::Down) {
+        return false;
+    }
+
+    let history = visible_prompt_history(app);
+    if history.is_empty() {
+        return false;
+    }
+
+    let target = if app.input.is_empty() {
+        match code {
+            KeyCode::Up => Some(history.len() - 1),
+            KeyCode::Down => None,
+            _ => None,
+        }
+    } else {
+        let Some(current_index) = history.iter().rposition(|prompt| prompt == &app.input) else {
+            return false;
+        };
+        match code {
+            KeyCode::Up => Some(current_index.saturating_sub(1)),
+            KeyCode::Down if current_index + 1 < history.len() => Some(current_index + 1),
+            KeyCode::Down => {
+                app.input.clear();
+                app.cursor_pos = 0;
+                app.reset_tab_completion();
+                app.sync_model_picker_preview_from_input();
+                return true;
+            }
+            _ => None,
+        }
+    };
+
+    let Some(target) = target else {
+        return false;
+    };
+    let Some(prompt) = history.get(target) else {
+        return false;
+    };
+    app.input = prompt.clone();
+    app.cursor_pos = app.input.len();
+    app.reset_tab_completion();
+    app.sync_model_picker_preview_from_input();
+    true
+}
+
 fn associated_text_for_key_event(_event: &KeyEvent) -> Option<String> {
     // Future hook: prefer terminal-provided associated text when crossterm exposes it.
     // Today crossterm does not surface this on KeyEvent even though the kitty protocol
@@ -1671,6 +1731,10 @@ impl App {
                 }
                 _ => {}
             }
+        }
+
+        if handle_prompt_history_navigation(self, code, modifiers) {
+            return Ok(());
         }
 
         if let Some(text) = text_input.or_else(|| text_input_for_key(code, modifiers)) {

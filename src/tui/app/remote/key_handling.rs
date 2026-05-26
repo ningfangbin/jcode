@@ -633,6 +633,10 @@ async fn handle_remote_key_internal(
         return Ok(());
     }
 
+    if input::handle_prompt_history_navigation(app, code, modifiers) {
+        return Ok(());
+    }
+
     if let Some(text) = text_input.or_else(|| input::text_input_for_key(code, modifiers)) {
         input::handle_text_input(app, &text);
         app.follow_chat_bottom_for_typing();

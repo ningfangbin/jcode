@@ -37,6 +37,76 @@ fn test_scroll_cmd_j_k_fallback_in_app() {
 }
 
 #[test]
+fn test_empty_prompt_up_down_browses_previous_prompts() {
+    let mut app = create_test_app();
+    app.display_messages = vec![
+        DisplayMessage::user("first prompt"),
+        DisplayMessage::assistant("first response"),
+        DisplayMessage::user("second prompt"),
+    ];
+    app.bump_display_messages_version();
+
+    app.handle_key(KeyCode::Up, KeyModifiers::empty()).unwrap();
+    assert_eq!(app.input, "second prompt");
+    assert_eq!(app.cursor_pos, app.input.len());
+
+    app.handle_key(KeyCode::Up, KeyModifiers::empty()).unwrap();
+    assert_eq!(app.input, "first prompt");
+
+    app.handle_key(KeyCode::Up, KeyModifiers::empty()).unwrap();
+    assert_eq!(app.input, "first prompt");
+
+    app.handle_key(KeyCode::Down, KeyModifiers::empty()).unwrap();
+    assert_eq!(app.input, "second prompt");
+
+    app.handle_key(KeyCode::Down, KeyModifiers::empty()).unwrap();
+    assert!(app.input.is_empty());
+    assert_eq!(app.cursor_pos, 0);
+}
+
+#[test]
+fn test_prompt_history_up_does_not_replace_unmatched_draft() {
+    let mut app = create_test_app();
+    app.display_messages = vec![DisplayMessage::user("previous prompt")];
+    app.input = "draft".to_string();
+    app.cursor_pos = app.input.len();
+
+    app.handle_key(KeyCode::Up, KeyModifiers::empty()).unwrap();
+
+    assert_eq!(app.input, "draft");
+    assert_eq!(app.cursor_pos, "draft".len());
+}
+
+#[test]
+fn test_remote_empty_prompt_up_down_browses_previous_prompts() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+    app.display_messages = vec![
+        DisplayMessage::user("first remote prompt"),
+        DisplayMessage::assistant("first response"),
+        DisplayMessage::user("second remote prompt"),
+    ];
+
+    rt.block_on(app.handle_remote_key(KeyCode::Up, KeyModifiers::empty(), &mut remote))
+        .unwrap();
+    assert_eq!(app.input, "second remote prompt");
+
+    rt.block_on(app.handle_remote_key(KeyCode::Up, KeyModifiers::empty(), &mut remote))
+        .unwrap();
+    assert_eq!(app.input, "first remote prompt");
+
+    rt.block_on(app.handle_remote_key(KeyCode::Down, KeyModifiers::empty(), &mut remote))
+        .unwrap();
+    assert_eq!(app.input, "second remote prompt");
+
+    rt.block_on(app.handle_remote_key(KeyCode::Down, KeyModifiers::empty(), &mut remote))
+        .unwrap();
+    assert!(app.input.is_empty());
+}
+
+#[test]
 fn test_remote_prompt_jump_ctrl_brackets() {
     let _render_lock = scroll_render_test_lock();
     let (mut app, mut terminal) = create_scroll_test_app(100, 30, 1, 20);
