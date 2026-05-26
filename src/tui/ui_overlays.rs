@@ -258,10 +258,6 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
         "Run layered verification and produce proof",
     ));
     lines.push(help_entry(
-        "/mission <objective>",
-        "Start/show an autonomous mission (/goal alias)",
-    ));
-    lines.push(help_entry(
         "/initiatives",
         "Open initiatives overview / resume an initiative",
     ));

@@ -1637,7 +1637,7 @@ pub(super) fn handle_session_command(app: &mut App, trimmed: &str) -> bool {
         return true;
     }
 
-    if handle_mission_command(app, trimmed) {
+    if handle_disabled_mission_command(app, trimmed) {
         return true;
     }
 
@@ -2073,107 +2073,17 @@ pub(super) fn handle_goals_command(app: &mut App, trimmed: &str) -> bool {
     true
 }
 
-pub(super) fn handle_mission_command(app: &mut App, trimmed: &str) -> bool {
-    let Some(rest) =
-        slash_command_rest(trimmed, "/mission").or_else(|| slash_command_rest(trimmed, "/goal"))
-    else {
+pub(super) fn handle_disabled_mission_command(app: &mut App, trimmed: &str) -> bool {
+    if slash_command_rest(trimmed, "/mission").is_none()
+        && slash_command_rest(trimmed, "/goal").is_none()
+    {
         return false;
-    };
-    let args = rest.trim();
-    let session_id = active_session_id(app);
-
-    let mut dispatch_prompt: Option<String> = None;
-    let result = match args {
-        "" | "status" => match crate::mission::load(&session_id) {
-            Ok(Some(mission)) => Ok(crate::mission::render_status(&mission)),
-            Ok(None) => Ok("No active mission. Usage: `/mission <objective>`".to_string()),
-            Err(e) => Err(e),
-        },
-        "pause" => mission_status_message(
-            &session_id,
-            crate::mission::MissionStatus::Paused,
-            "Mission paused.",
-        ),
-        "resume" => {
-            match crate::mission::update_status(&session_id, crate::mission::MissionStatus::Active)
-            {
-                Ok(Some(mission)) => {
-                    dispatch_prompt = Some(build_mission_dispatch_prompt(&mission, false));
-                    Ok("Mission resumed. Starting continuation now.".to_string())
-                }
-                Ok(None) => Ok("No active mission. Usage: `/mission <objective>`".to_string()),
-                Err(e) => Err(e),
-            }
-        }
-        "complete" => mission_status_message(
-            &session_id,
-            crate::mission::MissionStatus::Complete,
-            "Mission marked complete.",
-        ),
-        "clear" => crate::mission::clear(&session_id).map(|cleared| {
-            if cleared {
-                "Mission cleared.".to_string()
-            } else {
-                "No mission to clear.".to_string()
-            }
-        }),
-        _ if args.starts_with("checkpoint ") => {
-            let summary = args.trim_start_matches("checkpoint ").trim();
-            crate::mission::checkpoint(&session_id, summary).map(|mission| match mission {
-                Some(_) => "Mission checkpoint saved.".to_string(),
-                None => "No active mission. Usage: `/mission <objective>`".to_string(),
-            })
-        }
-        _ if args.starts_with("block ") => {
-            let reason = args.trim_start_matches("block ").trim();
-            crate::mission::checkpoint(&session_id, &format!("Blocked: {}", reason)).and_then(
-                |_| {
-                    mission_status_message(
-                        &session_id,
-                        crate::mission::MissionStatus::Blocked,
-                        "Mission marked blocked.",
-                    )
-                },
-            )
-        }
-        _ => crate::mission::set(&session_id, args).map(|mission| {
-            dispatch_prompt = Some(build_mission_dispatch_prompt(&mission, true));
-            format!(
-                "Mission set: **{}**\n\n{}\n\nStarting mission now.",
-                mission.objective, mission.long_horizon_intent
-            )
-        }),
-    };
-
-    match result {
-        Ok(message) => {
-            app.push_display_message(DisplayMessage::system(message));
-            if let Some(prompt) = dispatch_prompt {
-                queue_mission_dispatch(app, prompt);
-            }
-            app.set_status_notice("Mission");
-        }
-        Err(e) => app.push_display_message(DisplayMessage::error(format!("Mission error: {}", e))),
     }
+
+    app.push_display_message(DisplayMessage::system(
+        "The /mission and /goal commands are disabled in this build.".to_string(),
+    ));
     true
-}
-
-fn build_mission_dispatch_prompt(mission: &crate::mission::Mission, is_new: bool) -> String {
-    let action = if is_new { "Start" } else { "Continue" };
-    format!(
-        "{action} the active mission now.\n\n{}",
-        crate::mission::render_mission_continuation_prompt(mission)
-    )
-}
-
-fn queue_mission_dispatch(app: &mut App, prompt: String) {
-    app.queued_messages.push(prompt);
-    if app.is_processing {
-        app.set_status_notice("Queued mission");
-    } else {
-        app.pending_queued_dispatch = true;
-        app.set_status_notice("Starting mission");
-    }
 }
 
 pub(super) fn handle_test_command(app: &mut App, trimmed: &str) -> bool {
@@ -2243,17 +2153,6 @@ Final proof packet required:\n\
 - Remaining gaps or untested environments.\n\
 - Confidence level and why the user should or should not expect to hit another obvious error."
     )
-}
-
-fn mission_status_message(
-    session_id: &str,
-    status: crate::mission::MissionStatus,
-    message: &str,
-) -> anyhow::Result<String> {
-    Ok(match crate::mission::update_status(session_id, status)? {
-        Some(_) => message.to_string(),
-        None => "No active mission. Usage: `/mission <objective>`".to_string(),
-    })
 }
 
 pub(super) fn active_session_id(app: &App) -> String {
