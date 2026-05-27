@@ -1383,7 +1383,11 @@ pub(super) fn handle_pre_control_shortcuts(
     code: KeyCode,
     modifiers: KeyModifiers,
 ) -> bool {
-    if modifiers.contains(KeyModifiers::ALT) && matches!(code, KeyCode::Char('y')) {
+    let macos_option_shortcut =
+        crate::tui::keybind::shortcut_char_for_macos_option_key(code, modifiers);
+    if (modifiers.contains(KeyModifiers::ALT) && matches!(code, KeyCode::Char('y')))
+        || macos_option_shortcut == Some('y')
+    {
         app.toggle_copy_selection_mode();
         return true;
     }
@@ -1396,11 +1400,15 @@ pub(super) fn handle_pre_control_shortcuts(
         app.toggle_side_panel();
         return true;
     }
-    if modifiers.contains(KeyModifiers::ALT) && matches!(code, KeyCode::Char('t')) {
+    if (modifiers.contains(KeyModifiers::ALT) && matches!(code, KeyCode::Char('t')))
+        || macos_option_shortcut == Some('t')
+    {
         app.toggle_diagram_pane_position();
         return true;
     }
-    if modifiers.contains(KeyModifiers::ALT) && matches!(code, KeyCode::Char('s')) {
+    if (modifiers.contains(KeyModifiers::ALT) && matches!(code, KeyCode::Char('s')))
+        || macos_option_shortcut == Some('s')
+    {
         app.toggle_typing_scroll_lock();
         return true;
     }
@@ -1440,6 +1448,11 @@ pub(super) fn handle_pre_control_shortcuts(
         return true;
     }
     if modifiers.contains(KeyModifiers::ALT) && handle_alt_key(app, code) {
+        return true;
+    }
+    if let Some(shortcut) = macos_option_shortcut
+        && handle_alt_key(app, KeyCode::Char(shortcut))
+    {
         return true;
     }
     if modifiers.contains(KeyModifiers::SUPER) && handle_super_key(app, code) {

@@ -6,8 +6,8 @@ pub use jcode_tui_core::keybind::{
     WorkspaceNavigationDirection, WorkspaceNavigationKeys,
 };
 use jcode_tui_core::keybind::{
-    format_binding, is_disabled, parse_bindings_or_default, parse_keybinding, parse_optional,
-    parse_or_default,
+    format_binding, is_disabled, macos_option_char_to_ascii_key, parse_bindings_or_default,
+    parse_keybinding, parse_optional, parse_or_default,
 };
 
 pub fn load_model_switch_keys() -> ModelSwitchKeys {
@@ -208,6 +208,32 @@ pub(crate) fn side_panel_toggle_key_label() -> &'static str {
 }
 
 pub(crate) fn matches_side_panel_toggle_key(code: KeyCode, modifiers: KeyModifiers) -> bool {
+    matches_side_panel_toggle_key_for_platform(code, modifiers, cfg!(target_os = "macos"))
+}
+
+pub(crate) fn shortcut_char_for_macos_option_key(
+    code: KeyCode,
+    modifiers: KeyModifiers,
+) -> Option<char> {
+    shortcut_char_for_macos_option_key_for_platform(code, modifiers, cfg!(target_os = "macos"))
+}
+
+fn shortcut_char_for_macos_option_key_for_platform(
+    code: KeyCode,
+    modifiers: KeyModifiers,
+    is_macos: bool,
+) -> Option<char> {
+    if !is_macos || !modifiers.is_empty() {
+        return None;
+    }
+    macos_option_char_to_ascii_key(code)
+}
+
+fn matches_side_panel_toggle_key_for_platform(
+    code: KeyCode,
+    modifiers: KeyModifiers,
+    is_macos: bool,
+) -> bool {
     if modifiers.contains(KeyModifiers::ALT) && matches!(code, KeyCode::Char('m')) {
         return true;
     }
@@ -215,8 +241,7 @@ pub(crate) fn matches_side_panel_toggle_key(code: KeyCode, modifiers: KeyModifie
     // macOS terminals often insert Option+M as `µ` unless Option is configured
     // as Meta/Alt. Treat that character as the same toggle so the advertised
     // shortcut works with the default Terminal/iTerm-style Option behavior.
-    #[cfg(target_os = "macos")]
-    if modifiers.is_empty() && matches!(code, KeyCode::Char('µ')) {
+    if shortcut_char_for_macos_option_key_for_platform(code, modifiers, is_macos) == Some('m') {
         return true;
     }
 
@@ -235,5 +260,80 @@ pub fn load_dictation_key() -> OptionalBinding {
             binding: Some(binding),
         },
         None => OptionalBinding::default(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn side_panel_toggle_matches_alt_m_on_all_platforms() {
+        assert!(matches_side_panel_toggle_key_for_platform(
+            KeyCode::Char('m'),
+            KeyModifiers::ALT,
+            false,
+        ));
+        assert!(matches_side_panel_toggle_key_for_platform(
+            KeyCode::Char('m'),
+            KeyModifiers::ALT,
+            true,
+        ));
+    }
+
+    #[test]
+    fn side_panel_toggle_matches_macos_option_m_micro_sign() {
+        assert!(matches_side_panel_toggle_key_for_platform(
+            KeyCode::Char('µ'),
+            KeyModifiers::empty(),
+            true,
+        ));
+        assert!(!matches_side_panel_toggle_key_for_platform(
+            KeyCode::Char('µ'),
+            KeyModifiers::empty(),
+            false,
+        ));
+    }
+
+    #[test]
+    fn side_panel_toggle_rejects_plain_m() {
+        assert!(!matches_side_panel_toggle_key_for_platform(
+            KeyCode::Char('m'),
+            KeyModifiers::empty(),
+            true,
+        ));
+    }
+
+    #[test]
+    fn macos_option_shortcut_chars_cover_builtin_alt_letter_shortcuts() {
+        for (option_char, ascii) in [
+            ('å', 'a'),
+            ('∫', 'b'),
+            ('ç', 'c'),
+            ('∂', 'd'),
+            ('´', 'e'),
+            ('ƒ', 'f'),
+            ('˙', 'h'),
+            ('ˆ', 'i'),
+            ('∆', 'j'),
+            ('˚', 'k'),
+            ('¬', 'l'),
+            ('µ', 'm'),
+            ('ß', 's'),
+            ('†', 't'),
+            ('¨', 'u'),
+            ('√', 'v'),
+            ('¥', 'y'),
+        ] {
+            assert_eq!(
+                shortcut_char_for_macos_option_key_for_platform(
+                    KeyCode::Char(option_char),
+                    KeyModifiers::empty(),
+                    true,
+                ),
+                Some(ascii),
+                "Option+{ascii} should map from {option_char}"
+            );
+        }
     }
 }

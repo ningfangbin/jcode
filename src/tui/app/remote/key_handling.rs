@@ -298,7 +298,11 @@ async fn handle_remote_key_internal(
         app.toggle_side_panel();
         return Ok(());
     }
-    if modifiers.contains(KeyModifiers::ALT) && matches!(code, KeyCode::Char('t')) {
+    let macos_option_shortcut =
+        crate::tui::keybind::shortcut_char_for_macos_option_key(code, modifiers);
+    if (modifiers.contains(KeyModifiers::ALT) && matches!(code, KeyCode::Char('t')))
+        || macos_option_shortcut == Some('t')
+    {
         app.toggle_diagram_pane_position();
         return Ok(());
     }
@@ -320,7 +324,9 @@ async fn handle_remote_key_internal(
         apply_remote_effort_direction(app, remote, direction).await?;
         return Ok(());
     }
-    if modifiers.contains(KeyModifiers::ALT) && matches!(code, KeyCode::Char('s')) {
+    if (modifiers.contains(KeyModifiers::ALT) && matches!(code, KeyCode::Char('s')))
+        || macos_option_shortcut == Some('s')
+    {
         app.toggle_typing_scroll_lock();
         return Ok(());
     }
@@ -337,8 +343,9 @@ async fn handle_remote_key_internal(
         return Ok(());
     }
 
-    if modifiers.contains(KeyModifiers::ALT) {
-        match code {
+    if modifiers.contains(KeyModifiers::ALT) || macos_option_shortcut.is_some() {
+        let alt_code = macos_option_shortcut.map(KeyCode::Char).unwrap_or(code);
+        match alt_code {
             KeyCode::Char('b') => {
                 if matches!(app.status, ProcessingStatus::RunningTool(_)) {
                     remote.background_tool().await?;
