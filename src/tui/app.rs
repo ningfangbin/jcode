@@ -74,7 +74,7 @@ mod observe;
 mod remote;
 mod remote_notifications;
 mod replay;
-mod run_shell;
+pub(crate) mod run_shell;
 mod runtime_memory;
 mod split_view;
 mod state_ui;
@@ -233,6 +233,7 @@ struct ModelPickerCacheSignature {
     provider_name: String,
     current_model: String,
     config_default_model: Option<String>,
+    config_default_provider: Option<String>,
     reasoning_effort: Option<String>,
     available_efforts: Vec<String>,
     simplified_model_picker: bool,
