@@ -509,7 +509,7 @@ pub(super) fn draw_model_status_overlay(
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  ↑/↓ scroll, PgUp/PgDn page, q/Esc close",
+        "  ↑/↓ scroll, PgUp/PgDn page, c copy report, q/Esc close",
         dim_style,
     )));
 

@@ -195,6 +195,16 @@ impl App {
             KeyCode::End | KeyCode::Char('G') => {
                 self.model_status_scroll = Some(usize::MAX);
             }
+            KeyCode::Char('c') => {
+                let success = super::helpers::copy_to_clipboard(&self.model_status_content);
+                if success {
+                    self.set_status_notice("Copied provider test coverage report".to_string());
+                } else {
+                    self.set_status_notice(
+                        "Failed to copy provider test coverage report".to_string(),
+                    );
+                }
+            }
             _ => {}
         }
         Ok(())
