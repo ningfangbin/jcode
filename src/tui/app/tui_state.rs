@@ -11,6 +11,7 @@ enum WidgetProviderKind {
     OpenAI,
     OpenCode,
     OpenRouter,
+    CostBasedApiKey,
     Copilot,
     Gemini,
     Unknown,
@@ -22,6 +23,15 @@ impl WidgetProviderKind {
             Some(provider) if provider == "openrouter" => Self::OpenRouter,
             Some(provider) if matches!(provider.as_str(), "opencode" | "opencode-go") => {
                 Self::OpenCode
+            }
+            Some(provider)
+                if matches!(
+                    provider.as_str(),
+                    "bedrock" | "aws-bedrock" | "azure-openai"
+                ) || crate::provider_catalog::openai_compatible_profile_by_id(&provider)
+                    .is_some_and(|profile| profile.requires_api_key) =>
+            {
+                Self::CostBasedApiKey
             }
             Some(provider) if provider == "copilot" => Self::Copilot,
             Some(provider) if provider == "gemini" => Self::Gemini,
@@ -128,13 +138,17 @@ impl App {
             Some(self.provider.name())
         };
 
-        let provider = WidgetProviderKind::from_provider_key(
-            model
-                .map(|model| crate::provider::resolve_model_capabilities(model, provider_name))
-                .and_then(|caps| caps.provider)
-                .as_deref()
-                .or(provider_name),
-        );
+        let provider_from_hint = WidgetProviderKind::from_provider_key(provider_name);
+        let provider = if provider_from_hint != WidgetProviderKind::Unknown {
+            provider_from_hint
+        } else {
+            WidgetProviderKind::from_provider_key(
+                model
+                    .map(|model| crate::provider::resolve_model_capabilities(model, provider_name))
+                    .and_then(|caps| caps.provider)
+                    .as_deref(),
+            )
+        };
 
         WidgetRouteInfo {
             provider,
@@ -148,19 +162,32 @@ impl App {
         }
 
         let auth_status = crate::auth::AuthStatus::check_fast();
+        let runtime_provider = active_runtime_provider_key();
 
         match route.provider {
             WidgetProviderKind::Anthropic => {
-                if auth_status.anthropic.has_oauth {
+                if matches!(
+                    runtime_provider.as_deref(),
+                    Some("claude-api" | "anthropic-api")
+                ) {
+                    crate::tui::info_widget::AuthMethod::AnthropicApiKey
+                } else if matches!(runtime_provider.as_deref(), Some("claude" | "anthropic")) {
                     crate::tui::info_widget::AuthMethod::AnthropicOAuth
                 } else if auth_status.anthropic.has_api_key {
+                    // AnthropicProvider::Auto tries direct API keys before OAuth.
                     crate::tui::info_widget::AuthMethod::AnthropicApiKey
+                } else if auth_status.anthropic.has_oauth {
+                    crate::tui::info_widget::AuthMethod::AnthropicOAuth
                 } else {
                     crate::tui::info_widget::AuthMethod::Unknown
                 }
             }
             WidgetProviderKind::OpenAI => {
-                if auth_status.openai_has_oauth {
+                if matches!(runtime_provider.as_deref(), Some("openai-api")) {
+                    crate::tui::info_widget::AuthMethod::OpenAIApiKey
+                } else if matches!(runtime_provider.as_deref(), Some("openai")) {
+                    crate::tui::info_widget::AuthMethod::OpenAIOAuth
+                } else if auth_status.openai_has_oauth {
                     crate::tui::info_widget::AuthMethod::OpenAIOAuth
                 } else if auth_status.openai_has_api_key {
                     crate::tui::info_widget::AuthMethod::OpenAIApiKey
@@ -169,7 +196,14 @@ impl App {
                 }
             }
             WidgetProviderKind::OpenCode => crate::tui::info_widget::AuthMethod::OpenCodeApiKey,
-            WidgetProviderKind::OpenRouter => crate::tui::info_widget::AuthMethod::OpenRouterApiKey,
+            WidgetProviderKind::OpenRouter => {
+                if openrouter_like_runtime_uses_api_key_cost(runtime_provider.as_deref()) {
+                    crate::tui::info_widget::AuthMethod::OpenRouterApiKey
+                } else {
+                    crate::tui::info_widget::AuthMethod::Unknown
+                }
+            }
+            WidgetProviderKind::CostBasedApiKey => crate::tui::info_widget::AuthMethod::ApiKey,
             WidgetProviderKind::Copilot => crate::tui::info_widget::AuthMethod::CopilotOAuth,
             WidgetProviderKind::Gemini => {
                 if auth_status.gemini == crate::auth::AuthState::Available {
@@ -297,7 +331,17 @@ impl App {
                 })
             }
             WidgetProviderKind::Gemini => None,
-            WidgetProviderKind::OpenRouter | WidgetProviderKind::OpenCode => {
+            WidgetProviderKind::OpenRouter => {
+                let runtime_provider = active_runtime_provider_key();
+                if route.is_remote
+                    || openrouter_like_runtime_uses_api_key_cost(runtime_provider.as_deref())
+                {
+                    Some(cost_based_usage())
+                } else {
+                    None
+                }
+            }
+            WidgetProviderKind::OpenCode | WidgetProviderKind::CostBasedApiKey => {
                 Some(cost_based_usage())
             }
             WidgetProviderKind::Unknown => None,
