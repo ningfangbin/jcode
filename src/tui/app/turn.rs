@@ -254,7 +254,7 @@ impl App {
                 tokio::select! {
                     // Redraw periodically
                     _ = redraw_interval.tick() => {
-                        if let Some(chunk) = self.stream_buffer.flush() {
+                        if let Some(chunk) = self.stream_buffer.flush_smooth_frame() {
                             self.append_streaming_text(&chunk);
                         }
                         // Poll for background compaction completion during streaming
