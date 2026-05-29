@@ -1020,6 +1020,31 @@ impl CompactionManager {
                     .clone()
                     .unwrap_or_else(|| self.mode_trigger_label().to_string());
                 self.log_compaction_state("apply_start", &trigger, all_messages);
+
+                // Defense-in-depth: `pending_cutoff` was computed against the
+                // active slice as it existed when the background task started. If
+                // the active slice has since shrunk (e.g. an interleaving hard
+                // compaction advanced `compacted_count`), the produced summary no
+                // longer aligns with the current offsets, and applying the stale
+                // cutoff would over-advance `compacted_count` and wipe out live
+                // messages (observed as "kept 0 recent messages"). A soft
+                // compaction must always leave a healthy active tail, so detect
+                // the mismatch and discard the stale result instead of applying
+                // it. Hard compacts already abort the pending task, so this is a
+                // belt-and-suspenders guard.
+                let active_len = self.active_messages(all_messages).len();
+                let leaves_no_healthy_tail =
+                    self.pending_cutoff > active_len.saturating_sub(MIN_TURNS_TO_KEEP);
+                if !all_messages.is_empty() && leaves_no_healthy_tail {
+                    crate::logging::warn(&format!(
+                        "[compaction] Discarding stale background compaction result (pending_cutoff={}, active_len={}, trigger={}) — context changed since it started",
+                        self.pending_cutoff, active_len, trigger,
+                    ));
+                    self.pending_cutoff = 0;
+                    self.pending_trigger = None;
+                    return;
+                }
+
                 let pre_tokens = self.effective_token_count_with(all_messages) as u64;
                 let compacted_chars: usize = self
                     .active_messages(all_messages)
@@ -1310,22 +1335,6 @@ impl CompactionManager {
     /// exceed the token budget, progressively keeps fewer turns down to
     /// `MIN_TURNS_TO_KEEP`.
     pub fn hard_compact_with(&mut self, all_messages: &[Message]) -> Result<usize, String> {
-        // A hard compact supersedes any in-flight background (reactive/proactive/
-        // semantic) compaction. That background task summarized messages relative
-        // to the *old* `compacted_count`; if we let it complete after hard
-        // compaction has already advanced `compacted_count`, applying its stale
-        // `pending_cutoff` double-compacts and can wipe out all live messages
-        // (e.g. "kept 0 recent messages"). Abort and discard it now.
-        if let Some(task) = self.pending_task.take() {
-            task.abort();
-            crate::logging::warn(&format!(
-                "[compaction] Aborting in-flight background compaction (pending_cutoff={}, trigger={:?}) — superseded by hard compact",
-                self.pending_cutoff, self.pending_trigger,
-            ));
-            self.pending_cutoff = 0;
-            self.pending_trigger = None;
-        }
-
         if self.clamp_compacted_count_to_messages(all_messages, "hard_compact_start") {
             self.log_compaction_state("hard_compact_clamped", "hard_compact", all_messages);
         }
@@ -1372,6 +1381,24 @@ impl CompactionManager {
 
         if cutoff == 0 {
             return Err("Cannot compact — would split tool call/result pairs".to_string());
+        }
+
+        // This hard compact will advance `compacted_count` and supersede any
+        // in-flight background (reactive/proactive/semantic) compaction. That
+        // background task summarized messages relative to the *old*
+        // `compacted_count`; if it completed afterwards, `check_and_apply_*`
+        // would add its stale `pending_cutoff` on top of the already-advanced
+        // `compacted_count`, double-compacting and wiping out all live messages
+        // (observed as "kept 0 recent messages"). Abort and discard it now that
+        // we're committed to the hard compact.
+        if let Some(task) = self.pending_task.take() {
+            task.abort();
+            crate::logging::warn(&format!(
+                "[compaction] Aborting in-flight background compaction (pending_cutoff={}, trigger={:?}) — superseded by hard compact",
+                self.pending_cutoff, self.pending_trigger,
+            ));
+            self.pending_cutoff = 0;
+            self.pending_trigger = None;
         }
 
         let dropped_count = cutoff;

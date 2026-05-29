@@ -331,6 +331,59 @@ async fn test_hard_compact_aborts_inflight_background_compaction() {
     );
 }
 
+/// Defense-in-depth: if `compacted_count` advances while a background
+/// compaction is in flight (so its `pending_cutoff` becomes stale), applying
+/// the completed result must NOT over-advance `compacted_count` and wipe the
+/// live tail. The stale result should be discarded instead.
+#[tokio::test]
+async fn test_stale_background_result_discarded_when_context_shrinks() {
+    let mut manager = CompactionManager::new().with_budget(1_000);
+    let mut messages = Vec::new();
+    for i in 0..30 {
+        messages.push(make_text_message(
+            Role::User,
+            &format!("turn {} content {}", i, "q".repeat(60)),
+        ));
+        manager.notify_message_added();
+    }
+
+    manager.update_observed_input_tokens(850);
+    let provider: Arc<dyn Provider> = Arc::new(MockSummaryProvider);
+    manager.maybe_start_compaction_with(&messages, provider);
+    assert!(manager.is_compacting());
+    let pending = manager.pending_cutoff;
+    assert!(pending > 0);
+
+    // Simulate an interleaving mutation that advances compacted_count out from
+    // under the in-flight task (e.g. a hard compact via a different path),
+    // leaving only a small active tail.
+    manager.compacted_count = messages.len() - 3;
+
+    // Drain the background task to completion, then apply.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        manager.check_and_apply_compaction_with(&messages);
+        if !manager.is_compacting() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(!manager.is_compacting(), "task should have been drained");
+
+    // The stale result must have been discarded: compacted_count stays where
+    // the interleaving mutation left it, and the live tail survives.
+    assert_eq!(
+        manager.compacted_count,
+        messages.len() - 3,
+        "stale pending_cutoff must not advance compacted_count further"
+    );
+    assert!(
+        manager.active_messages(&messages).len() >= 3,
+        "live tail must survive a discarded stale compaction"
+    );
+    assert_eq!(manager.pending_cutoff, 0, "pending_cutoff must be reset");
+}
+
 #[tokio::test]
 async fn test_guard_at_95_triggers_hard_compact() {
     let mut manager = CompactionManager::new().with_budget(1_000);
