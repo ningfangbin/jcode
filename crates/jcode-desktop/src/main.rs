@@ -8755,6 +8755,7 @@ struct Canvas {
     primitive_vertices_cache: Vec<Vertex>,
     primitive_frame_vertices: Vec<Vertex>,
     primitive_workspace_vertices: Vec<Vertex>,
+    primitive_workspace_vertices_cache_key: Option<u64>,
     app_mode_transition: AppModeTransitionState,
     app_mode_transition_vertices: Vec<Vertex>,
     single_session_scroll_motion: SingleSessionScrollMotion,
@@ -8898,6 +8899,7 @@ impl Canvas {
             primitive_vertices_cache: Vec::new(),
             primitive_frame_vertices: Vec::new(),
             primitive_workspace_vertices: Vec::new(),
+            primitive_workspace_vertices_cache_key: None,
             app_mode_transition: AppModeTransitionState::default(),
             app_mode_transition_vertices: Vec::new(),
             single_session_scroll_motion: SingleSessionScrollMotion::default(),
@@ -10348,26 +10350,78 @@ impl Canvas {
                 let status_color = workspace_status_color_for_frame
                     .unwrap_or_else(|| workspace_status_bar_target_color(workspace));
                 let status_text_frame = workspace_status_text_frame.as_ref();
-                build_vertices_into(
-                    WorkspaceVertexBuildParams {
+                // When nothing is animating, the assembled workspace vertex
+                // buffer is a pure function of the workspace content state, so
+                // we can reuse the previously built buffer and skip rebuilding
+                // ~100k vertices every redraw.
+                let workspace_geometry_cache_key = (!animation_active).then(|| {
+                    workspace_primitive_vertices_cache_key(
                         workspace,
-                        size: self.size,
+                        self.size,
                         render_layout,
                         focus_pulse,
-                        space_hold_progress: workspace_space_hold_progress,
-                        surface_frames: workspace_surface_frames_for_frame.as_ref(),
-                        exiting_surfaces: &self.workspace_surface_exit_cache,
-                        workspace_panel_cache: Some(&self.workspace_text_pane_cache),
+                        workspace_space_hold_progress,
                         status_color,
                         status_text_frame,
-                    },
-                    &mut self.primitive_workspace_vertices,
-                );
-                frame_profile.checkpoint("vertices_geometry");
-                (
-                    Cow::Borrowed(self.primitive_workspace_vertices.as_slice()),
-                    animation_active,
-                )
+                        &self.workspace_text_pane_cache,
+                    )
+                });
+                if let Some(cache_key) = workspace_geometry_cache_key {
+                    if self.primitive_workspace_vertices_cache_key == Some(cache_key)
+                        && !self.primitive_workspace_vertices.is_empty()
+                    {
+                        primitive_geometry_cache_hit = true;
+                        frame_profile.checkpoint("vertices_geometry");
+                        (
+                            Cow::Borrowed(self.primitive_workspace_vertices.as_slice()),
+                            animation_active,
+                        )
+                    } else {
+                        self.primitive_workspace_vertices_cache_key = Some(cache_key);
+                        build_vertices_into(
+                            WorkspaceVertexBuildParams {
+                                workspace,
+                                size: self.size,
+                                render_layout,
+                                focus_pulse,
+                                space_hold_progress: workspace_space_hold_progress,
+                                surface_frames: workspace_surface_frames_for_frame.as_ref(),
+                                exiting_surfaces: &self.workspace_surface_exit_cache,
+                                workspace_panel_cache: Some(&self.workspace_text_pane_cache),
+                                status_color,
+                                status_text_frame,
+                            },
+                            &mut self.primitive_workspace_vertices,
+                        );
+                        frame_profile.checkpoint("vertices_geometry");
+                        (
+                            Cow::Borrowed(self.primitive_workspace_vertices.as_slice()),
+                            animation_active,
+                        )
+                    }
+                } else {
+                    self.primitive_workspace_vertices_cache_key = None;
+                    build_vertices_into(
+                        WorkspaceVertexBuildParams {
+                            workspace,
+                            size: self.size,
+                            render_layout,
+                            focus_pulse,
+                            space_hold_progress: workspace_space_hold_progress,
+                            surface_frames: workspace_surface_frames_for_frame.as_ref(),
+                            exiting_surfaces: &self.workspace_surface_exit_cache,
+                            workspace_panel_cache: Some(&self.workspace_text_pane_cache),
+                            status_color,
+                            status_text_frame,
+                        },
+                        &mut self.primitive_workspace_vertices,
+                    );
+                    frame_profile.checkpoint("vertices_geometry");
+                    (
+                        Cow::Borrowed(self.primitive_workspace_vertices.as_slice()),
+                        animation_active,
+                    )
+                }
             }
         };
         frame_profile.checkpoint("vertices");
@@ -11583,6 +11637,81 @@ fn workspace_panel_size(rect: Rect) -> PhysicalSize<u32> {
         rect.width.round().max(1.0) as u32,
         rect.height.round().max(1.0) as u32,
     )
+}
+
+/// Identity key for the fully-assembled workspace primitive vertex buffer.
+///
+/// This is only meaningful (and only consulted) when no workspace animation is
+/// active, in which case the viewport layout, focus pulse, surface transitions
+/// and status transitions are all settled and therefore pure functions of the
+/// workspace content state. Hashing the inputs lets idle frames reuse the
+/// previously assembled vertex buffer instead of re-transforming ~100k vertices
+/// every redraw.
+fn workspace_primitive_vertices_cache_key(
+    workspace: &Workspace,
+    size: PhysicalSize<u32>,
+    render_layout: WorkspaceRenderLayout,
+    focus_pulse: f32,
+    space_hold_progress: Option<f32>,
+    status_color: [f32; 4],
+    status_text_frame: Option<&StatusTextTransitionFrame>,
+    panel_cache: &HashMap<u64, CachedWorkspaceSingleSessionTextPane>,
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    size.width.hash(&mut hasher);
+    size.height.hash(&mut hasher);
+    render_layout.column_width.to_bits().hash(&mut hasher);
+    render_layout.scroll_offset.to_bits().hash(&mut hasher);
+    render_layout
+        .vertical_scroll_offset
+        .to_bits()
+        .hash(&mut hasher);
+    focus_pulse.to_bits().hash(&mut hasher);
+    space_hold_progress
+        .map(f32::to_bits)
+        .hash(&mut hasher);
+    for channel in status_color {
+        channel.to_bits().hash(&mut hasher);
+    }
+    if let Some(frame) = status_text_frame {
+        frame.current.text.hash(&mut hasher);
+        frame.current.opacity.to_bits().hash(&mut hasher);
+        frame.current.y_offset_pixels.to_bits().hash(&mut hasher);
+        if let Some(previous) = &frame.previous {
+            previous.text.hash(&mut hasher);
+            previous.opacity.to_bits().hash(&mut hasher);
+            previous.y_offset_pixels.to_bits().hash(&mut hasher);
+        } else {
+            0u8.hash(&mut hasher);
+        }
+    }
+    workspace.zoomed.hash(&mut hasher);
+    (workspace.mode == InputMode::Insert).hash(&mut hasher);
+    workspace.focused_id.hash(&mut hasher);
+    workspace.detail_scroll.hash(&mut hasher);
+    workspace.current_workspace().hash(&mut hasher);
+    for surface in &workspace.surfaces {
+        surface.id.hash(&mut hasher);
+        workspace_surface_kind_key(surface.kind).hash(&mut hasher);
+        surface.lane.hash(&mut hasher);
+        surface.column.hash(&mut hasher);
+        surface.color_index.hash(&mut hasher);
+        surface.title.hash(&mut hasher);
+        surface.body_lines.hash(&mut hasher);
+        surface.detail_lines.hash(&mut hasher);
+        surface.session_id.hash(&mut hasher);
+        // Cached panel vertex generation differentiates rendered transcript
+        // content for session surfaces.
+        if let Some(entry) = panel_cache.get(&surface.id) {
+            entry.identity_key.hash(&mut hasher);
+        }
+    }
+    if workspace.mode == InputMode::Insert {
+        workspace.draft.hash(&mut hasher);
+        workspace.draft_cursor.hash(&mut hasher);
+        workspace.pending_images.len().hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 fn workspace_single_session_app_for_surface(
