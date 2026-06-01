@@ -8841,6 +8841,7 @@ struct Canvas {
     single_session_streaming_text_opacity_bits: Option<u32>,
     single_session_streaming_text_buffer: Option<Buffer>,
     single_session_body_text_scroll_start: Option<usize>,
+    single_session_body_text_top_offset_bits: Option<u32>,
     single_session_body_text_window_start: Option<usize>,
     single_session_body_text_window_end: Option<usize>,
     welcome_hero_reveal_key: Option<String>,
@@ -8986,6 +8987,7 @@ impl Canvas {
             single_session_streaming_text_opacity_bits: None,
             single_session_streaming_text_buffer: None,
             single_session_body_text_scroll_start: None,
+            single_session_body_text_top_offset_bits: None,
             single_session_body_text_window_start: None,
             single_session_body_text_window_end: None,
             welcome_hero_reveal_key: None,
@@ -9092,6 +9094,7 @@ impl Canvas {
                 self.single_session_text_key = None;
                 self.single_session_text_buffers.clear();
                 self.single_session_body_text_scroll_start = None;
+                self.single_session_body_text_top_offset_bits = None;
                 self.single_session_body_text_window_start = None;
                 self.single_session_body_text_window_end = None;
                 return;
@@ -9141,12 +9144,23 @@ impl Canvas {
             self.single_session_text_cache_key = Some(text_cache_key);
             if !can_reuse_body_buffer {
                 self.single_session_body_text_scroll_start = None;
+                self.single_session_body_text_top_offset_bits = None;
                 self.single_session_body_text_window_start = None;
                 self.single_session_body_text_window_end = None;
             }
             self.text_needs_prepare = true;
         }
         self.sync_single_session_body_text_window(app, render_size, &viewport);
+        self.sync_single_session_body_text_top_offset(viewport.top_offset_pixels);
+    }
+
+    fn sync_single_session_body_text_top_offset(&mut self, top_offset_pixels: f32) {
+        let bits = top_offset_pixels.to_bits();
+        if self.single_session_body_text_top_offset_bits == Some(bits) {
+            return;
+        }
+        self.single_session_body_text_top_offset_bits = Some(bits);
+        self.text_needs_prepare = true;
     }
 
     fn sync_single_session_body_text_window(
@@ -9184,6 +9198,7 @@ impl Canvas {
             self.single_session_body_text_window_start = Some(window_start);
             self.single_session_body_text_window_end = Some(window_end);
             self.single_session_body_text_scroll_start = None;
+            self.single_session_body_text_top_offset_bits = None;
             self.sync_single_session_body_text_scroll(viewport.start_line, window_start);
         }
         self.sync_single_session_streaming_text_buffer(app, render_size, viewport);
@@ -9566,6 +9581,7 @@ impl Canvas {
                     self.single_session_streaming_base_len = self.single_session_body_lines.len();
                     self.single_session_streaming_base_key = Some(base_key);
                     self.single_session_body_text_scroll_start = None;
+                    self.single_session_body_text_top_offset_bits = None;
                     self.single_session_body_text_window_start = None;
                     self.single_session_body_text_window_end = None;
                 } else {
@@ -9575,6 +9591,7 @@ impl Canvas {
                     self.single_session_streaming_base_len = 0;
                     self.single_session_body_key = Some(key);
                     self.single_session_body_text_scroll_start = None;
+                    self.single_session_body_text_top_offset_bits = None;
                     self.single_session_body_text_window_start = None;
                     self.single_session_body_text_window_end = None;
                     return (key, true);
