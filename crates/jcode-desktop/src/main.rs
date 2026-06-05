@@ -5782,13 +5782,18 @@ fn benchmark_real_transcript_actions(
     }
 
     // 7. Window resize sweep: each frame is a different surface size, forcing a
-    //    full body relayout + window rebuild (the worst non-scroll case).
+    //    body re-wrap + window rebuild (the worst non-scroll case).
+    //
+    //    Mirrors production (`cached_single_session_body_lines` non-streaming
+    //    branch): the raw styled lines (markdown parse) are generated ONCE and
+    //    cached across sizes; only the width-dependent wrap re-runs per resize.
     {
         let app = base_app.clone();
+        let raw_lines = app.body_styled_lines_for_tick(0);
         let mut font_system = benchmark_font_system();
         let (samples, _) = benchmark_frame_samples(frames, |frame| {
             let resize = benchmark_resize_size(frame);
-            let lines = single_session_rendered_body_lines_for_tick(&app, resize, 0);
+            let lines = single_session_rendered_body_lines_from_raw_ref(&app, resize, &raw_lines);
             let viewport = single_session_body_viewport_from_lines(&app, resize, 0.0, &lines);
             let key =
                 single_session_text_key_for_tick_with_rendered_body(&app, resize, 0, 0.0, &lines);
