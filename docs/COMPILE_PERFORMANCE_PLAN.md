@@ -1076,3 +1076,48 @@ test relocation, cranelift, prefer-dynamic) was measured and rejected. The warm
 edit loop is a balanced ~10s serial chain; the only remaining levers are
 product-level (trim the statically-linked dependency weight) and are explicitly
 out of scope.
+
+## Incremental cache audit (2026-06-08)
+
+Audited whether the incremental-build caching is configured optimally. It is —
+but a multi-agent workflow detail was found that silently destroys cache reuse.
+
+### Config: correct, nothing to change
+
+- `selfdev` / `dev` / `test` all set `incremental = true`. ✓
+- sccache is deliberately **skipped** for incremental builds (`maybe_enable_sccache`
+  in `dev_cargo.sh`): sccache cannot cache incremental compilation units, so on
+  our incremental profiles it would add wrapper overhead for 0% hits. Forcing it
+  on requires `JCODE_SCCACHE=on` (and a non-incremental profile to be useful). ✓
+- The nightly parallel front-end (`-Zthreads=4`) is incremental-compatible —
+  verified: a genuinely idle no-op rebuild is **0.4s** (pure fingerprint checks),
+  so `-Zthreads` does not defeat the dep-graph cache. ✓
+
+### The real issue: shared-worktree mtime invalidation
+
+A "no-op" rebuild (touch nothing) was observed taking **46s** instead of 0.4s.
+`CARGO_LOG=cargo::core::compiler::fingerprint=info` showed the cause:
+
+```
+stale: changed ".../jcode-provider-core/src/lib.rs"
+  source_mtime > fingerprint_mtime   -> StaleDepFingerprint cascades to the whole graph
+```
+
+The source content had not changed — only its **mtime** had, because **another
+agent was editing files in the same shared worktree** (`/home/jeremy/jcode`)
+between builds. Cargo keys freshness on mtime, so any concurrent edit to a low,
+high-fanout crate (e.g. `jcode-provider-core`, `jcode-base`) invalidates that
+crate and everything downstream, turning a 0.4s no-op into a full-chain rebuild.
+
+Proven back-to-back: build #2 (idle) = **0.4s**; build #3, after a sibling
+session touched `inline_interactive.rs` / `info_widget_stability.rs`, = **46.6s**.
+
+### The fix (workflow, not config)
+
+Heavy or parallel agent work should run in a **separate `git worktree` with its
+own `target/` dir**, not piled into the shared root worktree. Each worktree then
+has a stable incremental cache and idle no-ops stay at ~0.4s, instead of agents
+cross-invalidating each other into repeated full-chain rebuilds. (This is exactly
+how the base-split experiment above was run — isolated worktree, isolated cache.)
+
+No config change is warranted; the caching itself is already optimal.
