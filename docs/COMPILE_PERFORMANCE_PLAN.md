@@ -1042,3 +1042,37 @@ remaining real levers are **product-level, not mechanical**:
   link on every build. Highest-probability remaining win; measure before committing.
 - **Dead code**: the root bin/lib is large and carries dead-code warnings;
   trimming genuinely-unused code is the one "free" structural win.
+
+### NEGATIVE — `-C prefer-dynamic` for the dev binary
+
+Hypothesis: the ~2s bin link is dominated by statically baking everything into a
+huge binary; `prefer-dynamic` should dynamize that and cut the link.
+
+Built the full bin with `-C prefer-dynamic` (selfdev + nightly threads + mold)
+and measured the incremental relink (touch `main.rs`), back-to-back vs
+static+mold under identical conditions:
+
+| link config | warm bin relink | binary size |
+| --- | --- | --- |
+| static + mold | ~1.8-2.7s | 414 MB |
+| prefer-dynamic + mold | ~1.8-3.0s | 413 MB |
+
+**No win, and the binary got no smaller.** `prefer-dynamic` only dynamizes crates
+that are built as dylibs (essentially Rust std); the workspace crates and the
+heavy deps (aws-sdk, tract, ratatui, ...) are still `rlib`s baked into the bin,
+so the link does the same work. The dynamic binary also needs its `.so` files on
+`LD_LIBRARY_PATH` to run, which would add fragility to the `selfdev reload` path
+(reload copies the binary to `~/.jcode/builds/current/`). Bad trade for zero gain.
+
+The only way dynamic linking would help is compiling the heavy *dependency*
+stacks as dylibs — which is the product-level "dependency weight" lever, not a
+mechanical config change.
+
+### Final verdict
+
+All non-product compile levers are now exhausted and documented. Shipped wins:
+the nightly parallel front-end and mold. Everything else (more crate splitting,
+test relocation, cranelift, prefer-dynamic) was measured and rejected. The warm
+edit loop is a balanced ~10s serial chain; the only remaining levers are
+product-level (trim the statically-linked dependency weight) and are explicitly
+out of scope.
