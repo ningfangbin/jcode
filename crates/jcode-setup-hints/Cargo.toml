@@ -16,5 +16,8 @@ jcode-logging = { path = "../jcode-logging" }
 jcode-storage = { path = "../jcode-storage" }
 serde = { version = "1", features = ["derive"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+global-hotkey = "0.7"
+
 [dev-dependencies]
 tempfile = "3"
