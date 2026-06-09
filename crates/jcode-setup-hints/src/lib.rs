@@ -39,6 +39,7 @@ use windows_setup::{
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct SetupHintsState {
     pub launch_count: u64,
     pub hotkey_configured: bool,
@@ -120,10 +121,24 @@ impl SetupHintsState {
     }
 
     pub fn load() -> Self {
-        Self::path()
-            .ok()
-            .and_then(|p| storage::read_json(&p).ok())
-            .unwrap_or_default()
+        let Ok(path) = Self::path() else {
+            return Self::default();
+        };
+        Self::load_from(&path)
+    }
+
+    /// Load state from `path`, falling back to its `.bak` sibling.
+    ///
+    /// The atomic writer keeps the previous version at `.bak`. If the primary
+    /// file is missing or unreadable (deleted, interrupted swap), fall back to
+    /// it instead of silently resetting state like `launch_count`, which
+    /// downstream heuristics (e.g. first-run onboarding) rely on.
+    fn load_from(path: &std::path::Path) -> Self {
+        if let Ok(state) = storage::read_json(path) {
+            return state;
+        }
+        let bak = path.with_extension("bak");
+        storage::read_json(&bak).unwrap_or_default()
     }
 
     pub fn save(&self) -> Result<()> {

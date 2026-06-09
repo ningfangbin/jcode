@@ -213,3 +213,38 @@ fn nudge_budget_caps_at_max_and_persists() {
     assert_eq!(state.terminal_nudge_count, MAX_TERMINAL_NUDGES);
     assert!(!state.nudge_budget_remaining());
 }
+
+#[test]
+fn load_from_falls_back_to_bak_when_primary_missing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("setup_hints.json");
+    let bak = dir.path().join("setup_hints.bak");
+
+    std::fs::write(&bak, r#"{"launch_count":42}"#).unwrap();
+
+    // Primary file missing: must recover launch_count from the .bak instead of
+    // resetting to default (which would re-trigger first-run onboarding).
+    let loaded = SetupHintsState::load_from(&path);
+    assert_eq!(loaded.launch_count, 42);
+}
+
+#[test]
+fn load_from_falls_back_to_bak_when_primary_corrupt_without_inline_recovery() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("setup_hints.json");
+    let bak = dir.path().join("setup_hints.bak");
+
+    std::fs::write(&path, b"{not json").unwrap();
+    std::fs::write(&bak, r#"{"launch_count":7}"#).unwrap();
+
+    let loaded = SetupHintsState::load_from(&path);
+    assert_eq!(loaded.launch_count, 7);
+}
+
+#[test]
+fn load_from_defaults_when_both_missing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("setup_hints.json");
+    let loaded = SetupHintsState::load_from(&path);
+    assert_eq!(loaded.launch_count, 0);
+}
