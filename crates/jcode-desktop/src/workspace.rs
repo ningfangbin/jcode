@@ -102,6 +102,8 @@ pub enum KeyInput {
     RetrieveQueuedDraft,
     SubmitDraft,
     SpawnPanel,
+    SpawnSelfDevSession,
+    SpawnHomeSession,
     HotkeyHelp,
     ToggleInputMode,
     ToggleSessionInfo,
@@ -122,6 +124,8 @@ pub enum KeyOutcome {
         title: String,
     },
     SpawnSession,
+    SpawnSelfDevSession,
+    SpawnHomeSession,
     SendDraft {
         session_id: String,
         title: String,
@@ -687,6 +691,12 @@ impl Workspace {
             KeyInput::SpawnPanel => {
                 return KeyOutcome::SpawnSession;
             }
+            KeyInput::SpawnSelfDevSession => {
+                return KeyOutcome::SpawnSelfDevSession;
+            }
+            KeyInput::SpawnHomeSession => {
+                return KeyOutcome::SpawnHomeSession;
+            }
             KeyInput::HotkeyHelp => {
                 self.open_hotkey_help();
                 return KeyOutcome::Redraw;
@@ -801,6 +811,8 @@ impl Workspace {
     fn handle_insert_key(&mut self, key: KeyInput) -> KeyOutcome {
         match key {
             KeyInput::SpawnPanel => KeyOutcome::SpawnSession,
+            KeyInput::SpawnSelfDevSession => KeyOutcome::SpawnSelfDevSession,
+            KeyInput::SpawnHomeSession => KeyOutcome::SpawnHomeSession,
             KeyInput::HotkeyHelp => {
                 self.open_hotkey_help();
                 KeyOutcome::Redraw

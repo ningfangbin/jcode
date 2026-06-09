@@ -366,6 +366,20 @@ pub fn launch_new_session() -> Result<()> {
     launch_first_available_terminal(candidates, "jcode")
 }
 
+pub fn launch_selfdev_session() -> Result<()> {
+    let candidates = terminal_candidates("jcode · self-dev", &["self-dev"]);
+    launch_first_available_terminal(candidates, "jcode self-dev")
+}
+
+pub fn launch_home_session() -> Result<()> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow::anyhow!("HOME is not set"))?;
+    let candidates =
+        terminal::terminal_candidates_in_dir("jcode · home", &["--fresh-spawn"], home.as_path());
+    launch_first_available_terminal(candidates, "jcode in home directory")
+}
+
 pub fn send_message_to_session(session_id: &str, _title: &str, message: &str) -> Result<()> {
     validate_resume_session_id(session_id).context("refusing to send to invalid session id")?;
     if message.trim().is_empty() {

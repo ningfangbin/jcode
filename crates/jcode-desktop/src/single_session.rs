@@ -2688,6 +2688,8 @@ impl SingleSessionApp {
 
         match key {
             KeyInput::SpawnPanel => KeyOutcome::SpawnSession,
+            KeyInput::SpawnSelfDevSession => KeyOutcome::SpawnSelfDevSession,
+            KeyInput::SpawnHomeSession => KeyOutcome::SpawnHomeSession,
             KeyInput::OpenSessionSwitcher => self.open_session_switcher(),
             KeyInput::OpenModelPicker => self.open_model_picker(),
             KeyInput::HotkeyHelp => {
@@ -3528,6 +3530,16 @@ impl SingleSessionApp {
                 self.capture_inline_widget_exit();
                 self.session_switcher.close();
                 KeyOutcome::SpawnSession
+            }
+            KeyInput::SpawnSelfDevSession => {
+                self.capture_inline_widget_exit();
+                self.session_switcher.close();
+                KeyOutcome::SpawnSelfDevSession
+            }
+            KeyInput::SpawnHomeSession => {
+                self.capture_inline_widget_exit();
+                self.session_switcher.close();
+                KeyOutcome::SpawnHomeSession
             }
             _ => KeyOutcome::None,
         }
@@ -7401,7 +7413,7 @@ const SINGLE_SESSION_HELP_SECTIONS: &[HelpSection] = &[
             ("Ctrl+Up", "pull latest queued prompt back into the input"),
             ("PageUp/PageDown", "scroll transcript"),
             ("Ctrl+Home/End", "jump transcript to top/bottom"),
-            ("Super+K/J", "scroll transcript by one line"),
+            ("Super+K/J", "jump between user prompts"),
             ("Alt+Up/Down", "jump between user prompts"),
             ("Ctrl+[/]", "jump between user prompts"),
             ("Mouse wheel", "scroll transcript"),
@@ -7413,7 +7425,7 @@ const SINGLE_SESSION_HELP_SECTIONS: &[HelpSection] = &[
             ("Ctrl+A/E", "start/end of line"),
             ("Ctrl+U/K", "delete to line start/end"),
             ("Ctrl+W/Ctrl+Backspace", "delete previous word"),
-            ("Alt+Backspace", "delete previous word, terminal-style"),
+            ("Alt/Super+Backspace", "delete previous word"),
             ("Ctrl+←/→, Ctrl+B/F", "move by word"),
             ("Alt+B/F", "move by word, terminal-style"),
             ("Alt+D", "delete next word"),
@@ -7427,6 +7439,8 @@ const SINGLE_SESSION_HELP_SECTIONS: &[HelpSection] = &[
         title: "window",
         shortcuts: &[
             ("Ctrl+;", "reset/spawn fresh desktop session"),
+            ("Super+;", "spawn a self-dev jcode session"),
+            ("Super+'", "spawn a jcode session in home"),
             ("Ctrl+R", "reload sessions/models while a picker is open"),
             ("Ctrl+?", "toggle this help"),
             ("q", "close help or session info"),

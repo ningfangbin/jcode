@@ -1227,6 +1227,20 @@ async fn run() -> Result<()> {
                                 window.request_redraw();
                             }
                         }
+                        KeyOutcome::SpawnSelfDevSession => {
+                            if let Err(error) = session_launch::launch_selfdev_session() {
+                                desktop_log::error(format_args!(
+                                    "jcode-desktop: failed to spawn self-dev session: {error:#}"
+                                ));
+                            }
+                        }
+                        KeyOutcome::SpawnHomeSession => {
+                            if let Err(error) = session_launch::launch_home_session() {
+                                desktop_log::error(format_args!(
+                                    "jcode-desktop: failed to spawn home session: {error:#}"
+                                ));
+                            }
+                        }
                         KeyOutcome::SendDraft {
                             session_id,
                             title,
@@ -8062,7 +8076,9 @@ fn to_key_input(key: &Key, modifiers: ModifiersState) -> KeyInput {
         }
         Key::Named(NamedKey::Tab) if modifiers.control_key() => KeyInput::CycleModel(1),
         Key::Named(NamedKey::Tab) => KeyInput::Autocomplete,
-        Key::Named(NamedKey::Backspace) if modifiers.control_key() || modifiers.alt_key() => {
+        Key::Named(NamedKey::Backspace)
+            if modifiers.control_key() || modifiers.alt_key() || modifiers.super_key() =>
+        {
             KeyInput::DeletePreviousWord
         }
         Key::Named(NamedKey::Backspace) => KeyInput::Backspace,
@@ -8166,10 +8182,10 @@ fn to_key_input(key: &Key, modifiers: ModifiersState) -> KeyInput {
         Key::Character(text) if modifiers.control_key() && text == "[" => KeyInput::JumpPrompt(-1),
         Key::Character(text) if modifiers.control_key() && text == "]" => KeyInput::JumpPrompt(1),
         Key::Character(text) if modifiers.super_key() && text.eq_ignore_ascii_case("k") => {
-            KeyInput::ScrollBodyLines(1)
+            KeyInput::JumpPrompt(-1)
         }
         Key::Character(text) if modifiers.super_key() && text.eq_ignore_ascii_case("j") => {
-            KeyInput::ScrollBodyLines(-1)
+            KeyInput::JumpPrompt(1)
         }
         Key::Character(text)
             if (modifiers.control_key() || modifiers.super_key())
@@ -8177,6 +8193,10 @@ fn to_key_input(key: &Key, modifiers: ModifiersState) -> KeyInput {
         {
             KeyInput::ExitApp
         }
+        Key::Character(text) if modifiers.super_key() && text == ";" => {
+            KeyInput::SpawnSelfDevSession
+        }
+        Key::Character(text) if modifiers.super_key() && text == "'" => KeyInput::SpawnHomeSession,
         Key::Character(text) if modifiers.control_key() && text == ";" => KeyInput::SpawnPanel,
         Key::Character(text) if modifiers.control_key() && (text == "?" || text == "/") => {
             KeyInput::HotkeyHelp
