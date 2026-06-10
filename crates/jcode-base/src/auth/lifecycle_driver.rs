@@ -184,16 +184,21 @@ impl AuthLifecycleResult {
             "{}",
             self.failure_report(spec)
         );
-        assert!(
-            !transcript.contains("OpenAI credentials are active"),
-            "{}",
-            self.failure_report(spec)
-        );
-        assert!(
-            !transcript.contains("OpenRouter credentials are active"),
-            "{}",
-            self.failure_report(spec)
-        );
+        // Anti-confusion guard: the transcript must never attribute the new
+        // credentials to a different provider (e.g. a Cerebras login reported
+        // as "OpenAI credentials are active"). Skip the marker matching the
+        // provider under test: OpenRouter/OpenAI-labelled compat profiles
+        // legitimately produce their own "credentials are active" line.
+        for other_label in ["OpenAI", "OpenRouter"] {
+            if spec.provider_label == other_label {
+                continue;
+            }
+            assert!(
+                !transcript.contains(&format!("{other_label} credentials are active")),
+                "{}",
+                self.failure_report(spec)
+            );
+        }
         self.assert_transcript_order(spec);
         for forbidden in [
             "Auth Model Catalog Warning",
@@ -395,11 +400,25 @@ impl AuthLifecycleDriver {
             expected_catalog_namespace: Some(CatalogNamespace::new(spec.provider_id)),
         };
         let activation = activate_auth_change(&AuthActivationRequest::new(None, Some(auth)));
-        let selected_model = spec
+        let catalog_routes = self.catalog_routes_for_spec(spec);
+        // The session's model immediately after activation: an explicit
+        // fixture override, else whatever runtime activation selected (the
+        // profile's static default model).
+        let session_model = spec
             .selected_model_override
             .clone()
             .or_else(|| activation.activated_model.clone());
-        let catalog_routes = self.catalog_routes_for_spec(spec);
+        // Mirror the server's post-auth re-selection
+        // (`handle_notify_auth_changed`): once the live catalog lands, jcode
+        // switches to an accessible model returned by the live catalog when
+        // the current model has no matching provider route (e.g. a static
+        // profile default the live catalog no longer serves).
+        let selected_model = provider_model_to_select_after_auth(
+            &activation,
+            session_model.as_deref(),
+            &catalog_routes,
+        )
+        .or(session_model);
         let catalog_report =
             validate_catalog_invariants(&activation, selected_model.as_deref(), &catalog_routes);
         let picker = PickerSnapshot::build(
