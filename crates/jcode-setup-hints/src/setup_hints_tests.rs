@@ -252,7 +252,10 @@ fn load_from_defaults_when_both_missing() {
 #[test]
 fn conflict_hint_decision_warns_only_when_conflicts_change() {
     // No conflicts ever: empty == empty => stay silent.
-    assert_eq!(conflict_hint_decision("", ""), ConflictHintDecision::Unchanged);
+    assert_eq!(
+        conflict_hint_decision("", ""),
+        ConflictHintDecision::Unchanged
+    );
 
     // New conflicts where there were none: warn.
     assert_eq!(
@@ -262,7 +265,10 @@ fn conflict_hint_decision_warns_only_when_conflicts_change() {
 
     // Same conflicts as last time: stay silent.
     let sig = "keybindings.model_switch_next|ctrl+tab|ctrl+tab";
-    assert_eq!(conflict_hint_decision(sig, sig), ConflictHintDecision::Unchanged);
+    assert_eq!(
+        conflict_hint_decision(sig, sig),
+        ConflictHintDecision::Unchanged
+    );
 
     // Conflicts resolved since last time (had some, now none): update silently.
     assert_eq!(

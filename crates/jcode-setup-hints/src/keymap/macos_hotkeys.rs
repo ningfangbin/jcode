@@ -177,7 +177,10 @@ pub fn parse_symbolic_hotkeys_json(json: &str) -> Vec<RawHotkey> {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
         return Vec::new();
     };
-    let Some(map) = value.get("AppleSymbolicHotKeys").and_then(|v| v.as_object()) else {
+    let Some(map) = value
+        .get("AppleSymbolicHotKeys")
+        .and_then(|v| v.as_object())
+    else {
         return Vec::new();
     };
 

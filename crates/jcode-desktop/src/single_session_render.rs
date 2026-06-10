@@ -3619,13 +3619,9 @@ pub(crate) fn push_single_session_streaming_tail_cursor(
     if !app.has_activity_indicator() || app.streaming_response.is_empty() {
         return;
     }
-    let Some(position) = streaming_tail_cursor_position(
-        app,
-        size,
-        viewport,
-        streaming_buffer,
-        streaming_start_line,
-    ) else {
+    let Some(position) =
+        streaming_tail_cursor_position(app, size, viewport, streaming_buffer, streaming_start_line)
+    else {
         return;
     };
 

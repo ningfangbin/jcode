@@ -27,7 +27,10 @@ async fn rejects_bad_action() {
     let err = run_action(json!({ "action": "frobnicate" }))
         .await
         .unwrap_err();
-    assert!(err.to_string().contains("Unknown macos_computer_use action"));
+    assert!(
+        err.to_string()
+            .contains("Unknown macos_computer_use action")
+    );
 }
 
 #[tokio::test]
@@ -42,7 +45,13 @@ async fn discover_all_lists_actions() {
         .await
         .unwrap();
     // Spot-check that several categories are present.
-    for needle in ["press", "set_value", "run_applescript", "list_windows", "screenshot"] {
+    for needle in [
+        "press",
+        "set_value",
+        "run_applescript",
+        "list_windows",
+        "screenshot",
+    ] {
         assert!(out.output.contains(needle), "missing {needle}");
     }
 }
@@ -106,11 +115,38 @@ fn schema_declares_every_input_field() {
     let schema = tool.parameters_schema();
     let props = schema["properties"].as_object().expect("properties object");
     for field in [
-        "action", "category", "x", "y", "to_x", "to_y", "w", "h", "text", "keys", "dx", "dy",
-        "depth", "app", "role", "title", "value", "element", "ax_action", "menu_path",
-        "window_id", "script", "contains", "timeout_ms", "region", "level", "dry_run",
+        "action",
+        "category",
+        "x",
+        "y",
+        "to_x",
+        "to_y",
+        "w",
+        "h",
+        "text",
+        "keys",
+        "dx",
+        "dy",
+        "depth",
+        "app",
+        "role",
+        "title",
+        "value",
+        "element",
+        "ax_action",
+        "menu_path",
+        "window_id",
+        "script",
+        "contains",
+        "timeout_ms",
+        "region",
+        "level",
+        "dry_run",
     ] {
-        assert!(props.contains_key(field), "schema is missing field `{field}`");
+        assert!(
+            props.contains_key(field),
+            "schema is missing field `{field}`"
+        );
     }
 }
 
@@ -181,7 +217,9 @@ async fn live_ui_tree() {
 #[tokio::test]
 #[ignore = "requires GUI + permissions"]
 async fn live_list_windows() {
-    let out = run_action(json!({ "action": "list_windows" })).await.unwrap();
+    let out = run_action(json!({ "action": "list_windows" }))
+        .await
+        .unwrap();
     eprintln!("{}", out.output);
 }
 
@@ -191,7 +229,9 @@ async fn live_clipboard_roundtrip() {
     run_action(json!({ "action": "set_clipboard", "text": "jcode-clip-test" }))
         .await
         .unwrap();
-    let out = run_action(json!({ "action": "get_clipboard" })).await.unwrap();
+    let out = run_action(json!({ "action": "get_clipboard" }))
+        .await
+        .unwrap();
     assert!(out.output.contains("jcode-clip-test"));
 }
 

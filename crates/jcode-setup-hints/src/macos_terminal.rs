@@ -1,5 +1,5 @@
-use jcode_storage as storage;
 use anyhow::Result;
+use jcode_storage as storage;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::PathBuf;

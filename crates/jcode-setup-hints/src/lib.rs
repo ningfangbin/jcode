@@ -8,10 +8,10 @@
 //! Each nudge can be dismissed permanently with "Don't ask again".
 //! State is persisted in `~/.jcode/setup_hints.json`.
 
-use jcode_storage as storage;
 #[cfg(target_os = "macos")]
 use anyhow::Context;
 use anyhow::Result;
+use jcode_storage as storage;
 use serde::{Deserialize, Serialize};
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
@@ -308,7 +308,9 @@ fn startup_hints_for_launch(state: &SetupHintsState) -> Option<StartupHints> {
     }
 
     if state.launch_count <= 3 {
-        let config_path = storage::jcode_dir().ok().map(|d| d.join("config.toml"))
+        let config_path = storage::jcode_dir()
+            .ok()
+            .map(|d| d.join("config.toml"))
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "~/.jcode/config.toml".to_string());
 

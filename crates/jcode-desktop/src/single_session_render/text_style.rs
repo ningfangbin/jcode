@@ -276,8 +276,7 @@ pub(super) fn apply_streaming_tail_fade<'a>(
                 faded.push((char_text, attrs));
             } else {
                 let distance_from_end = (total_chars - 1 - char_index) as f32;
-                let multiplier =
-                    ((distance_from_end + 1.0) / tail_fade_chars).clamp(0.0, 1.0);
+                let multiplier = ((distance_from_end + 1.0) / tail_fade_chars).clamp(0.0, 1.0);
                 faded.push((char_text, text_attrs_with_opacity(attrs, multiplier)));
             }
             char_index += 1;
@@ -1090,7 +1089,10 @@ mod tail_fade_tests {
     }
 
     fn segment_alpha(attrs: &Attrs<'static>) -> u8 {
-        attrs.color_opt.map(|color| color.as_rgba_tuple().3).unwrap_or(255)
+        attrs
+            .color_opt
+            .map(|color| color.as_rgba_tuple().3)
+            .unwrap_or(255)
     }
 
     #[test]
@@ -1109,10 +1111,16 @@ mod tail_fade_tests {
         // "ab" untouched, then c..f split per char with decreasing alpha.
         let text: String = faded.iter().map(|(text, _)| *text).collect();
         assert_eq!(text, "abcdef");
-        let alphas: Vec<u8> = faded.iter().map(|(_, attrs)| segment_alpha(attrs)).collect();
+        let alphas: Vec<u8> = faded
+            .iter()
+            .map(|(_, attrs)| segment_alpha(attrs))
+            .collect();
         // Last char must be the faintest, monotonically increasing backward.
         for window in alphas.windows(2) {
-            assert!(window[0] >= window[1], "alphas must not rise toward the end: {alphas:?}");
+            assert!(
+                window[0] >= window[1],
+                "alphas must not rise toward the end: {alphas:?}"
+            );
         }
         assert!(*alphas.last().unwrap() < 200);
         assert_eq!(alphas[0], 200);

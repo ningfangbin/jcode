@@ -181,7 +181,10 @@ mod tests {
             "execution error: System Events got an error: osascript is not allowed assistive access. (-25211)",
             "AppleScript",
         );
-        assert!(msg.contains("Accessibility permission required"), "got: {msg}");
+        assert!(
+            msg.contains("Accessibility permission required"),
+            "got: {msg}"
+        );
     }
 
     #[test]

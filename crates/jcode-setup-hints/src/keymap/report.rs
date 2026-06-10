@@ -3,9 +3,9 @@
 
 use jcode_config_types::KeybindingsConfig;
 
-use super::conflicts::{detect_conflicts, Conflict};
-use super::source::KeySource;
 use super::KeymapSnapshot;
+use super::conflicts::{Conflict, detect_conflicts};
+use super::source::KeySource;
 
 /// Render a full diagnostic report: detected terminal, discovered binding
 /// counts, and any conflicts with jcode's configured bindings.
@@ -104,8 +104,8 @@ pub fn render_status_line(cfg: &KeybindingsConfig, snapshot: &KeymapSnapshot) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::keymap::source::DiscoveredBinding;
     use crate::keymap::KeyChord;
+    use crate::keymap::source::DiscoveredBinding;
 
     fn snapshot_with(bindings: Vec<DiscoveredBinding>) -> KeymapSnapshot {
         KeymapSnapshot {

@@ -84,7 +84,9 @@ pub fn window_screenshot(window_id: i64) -> Result<ToolOutput> {
     ))
     .with_title("window screenshot")
     .with_labeled_image("image/png", STANDARD.encode(&bytes), "window")
-    .with_metadata(json!({ "window_id": window_id, "width_pixels": pixel_w, "height_pixels": pixel_h })))
+    .with_metadata(
+        json!({ "window_id": window_id, "width_pixels": pixel_w, "height_pixels": pixel_h }),
+    ))
 }
 
 /// OCR a region (or the whole screen) using the macOS Vision framework via a

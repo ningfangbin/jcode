@@ -120,8 +120,7 @@ pub(crate) fn advance_revealed_chars(revealed: f32, target: f32, dt_seconds: f32
 /// window shrinks to zero while the stream is paused so the trailing text
 /// settles to full opacity instead of staying dim.
 pub(crate) fn streaming_reveal_tail_fade_chars(idle: Duration) -> f32 {
-    let settle =
-        (idle.as_secs_f32() / STREAMING_REVEAL_TAIL_SETTLE.as_secs_f32()).clamp(0.0, 1.0);
+    let settle = (idle.as_secs_f32() / STREAMING_REVEAL_TAIL_SETTLE.as_secs_f32()).clamp(0.0, 1.0);
     STREAMING_REVEAL_TAIL_FADE_CHARS * (1.0 - ease_out_cubic_local(settle))
 }
 

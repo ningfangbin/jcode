@@ -120,13 +120,7 @@ pub fn materialize_inline_image(media_type: &str, data_b64: &str) -> Option<(u64
         .ok()?;
     let image = image::load_from_memory(&bytes).ok()?;
     let (width, height) = image.dimensions();
-    dims_cache_put(
-        id,
-        InlineDims {
-            width,
-            height,
-        },
-    );
+    dims_cache_put(id, InlineDims { width, height });
 
     let ext = inline_image_extension(media_type);
     if let Ok(mut cache) = RENDER_CACHE.lock() {
@@ -204,10 +198,7 @@ pub(crate) fn dimensions_from_header(data: &[u8]) -> Option<(u32, u32)> {
             }
             let marker = data[i + 1];
             // SOF0 (baseline) / SOF1 / SOF2 (progressive) etc.
-            if (0xC0..=0xCF).contains(&marker)
-                && marker != 0xC4
-                && marker != 0xC8
-                && marker != 0xCC
+            if (0xC0..=0xCF).contains(&marker) && marker != 0xC4 && marker != 0xC8 && marker != 0xCC
             {
                 let height = u16::from_be_bytes([data[i + 5], data[i + 6]]) as u32;
                 let width = u16::from_be_bytes([data[i + 7], data[i + 8]]) as u32;
@@ -247,8 +238,10 @@ pub(crate) fn dimensions_from_header(data: &[u8]) -> Option<(u32, u32)> {
     if data.len() > 30 && &data[0..4] == b"RIFF" && &data[8..12] == b"WEBP" {
         let fourcc = &data[12..16];
         if fourcc == b"VP8X" && data.len() > 30 {
-            let w = 1 + (u32::from(data[24]) | (u32::from(data[25]) << 8) | (u32::from(data[26]) << 16));
-            let h = 1 + (u32::from(data[27]) | (u32::from(data[28]) << 8) | (u32::from(data[29]) << 16));
+            let w = 1
+                + (u32::from(data[24]) | (u32::from(data[25]) << 8) | (u32::from(data[26]) << 16));
+            let h = 1
+                + (u32::from(data[27]) | (u32::from(data[28]) << 8) | (u32::from(data[29]) << 16));
             return Some((w, h));
         }
         if fourcc == b"VP8 " && data.len() > 30 {

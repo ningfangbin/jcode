@@ -15,9 +15,9 @@ use std::collections::HashMap;
 
 use jcode_config_types::KeybindingsConfig;
 
+use super::KeymapSnapshot;
 use super::chord::KeyChord;
 use super::source::{DiscoveredBinding, KeySource};
-use super::KeymapSnapshot;
 
 /// One configured jcode binding, tied back to its config field.
 #[derive(Debug, Clone)]
@@ -78,7 +78,11 @@ pub fn jcode_bindings(cfg: &KeybindingsConfig) -> Vec<JcodeBinding> {
         ("scroll_up", "Scroll up", cfg.scroll_up.as_str()),
         ("scroll_down", "Scroll down", cfg.scroll_down.as_str()),
         ("scroll_page_up", "Page up", cfg.scroll_page_up.as_str()),
-        ("scroll_page_down", "Page down", cfg.scroll_page_down.as_str()),
+        (
+            "scroll_page_down",
+            "Page down",
+            cfg.scroll_page_down.as_str(),
+        ),
         (
             "model_switch_next",
             "Switch to next model",
@@ -175,10 +179,26 @@ pub fn jcode_bindings(cfg: &KeybindingsConfig) -> Vec<JcodeBinding> {
 
     // Multi-binding (comma-separated list) fields.
     let multi: [(&str, &str, &str); 4] = [
-        ("workspace_left", "Move to left workspace", cfg.workspace_left.as_str()),
-        ("workspace_down", "Move to lower workspace", cfg.workspace_down.as_str()),
-        ("workspace_up", "Move to upper workspace", cfg.workspace_up.as_str()),
-        ("workspace_right", "Move to right workspace", cfg.workspace_right.as_str()),
+        (
+            "workspace_left",
+            "Move to left workspace",
+            cfg.workspace_left.as_str(),
+        ),
+        (
+            "workspace_down",
+            "Move to lower workspace",
+            cfg.workspace_down.as_str(),
+        ),
+        (
+            "workspace_up",
+            "Move to upper workspace",
+            cfg.workspace_up.as_str(),
+        ),
+        (
+            "workspace_right",
+            "Move to right workspace",
+            cfg.workspace_right.as_str(),
+        ),
     ];
     for (field, action, raw) in multi {
         for piece in raw.split(',') {
@@ -296,8 +316,11 @@ mod tests {
             "expected model_switch_next ctrl+tab in {binds:#?}"
         );
         // Workspace nav defaults are alt+h/j/k/l.
-        assert!(binds.iter().any(|b| b.field == "keybindings.workspace_left"
-            && b.chord.canonical() == "alt+h"));
+        assert!(
+            binds
+                .iter()
+                .any(|b| b.field == "keybindings.workspace_left" && b.chord.canonical() == "alt+h")
+        );
     }
 
     #[test]
@@ -368,7 +391,10 @@ mod tests {
 
         let snap_c = snapshot_with(vec![term_binding("ctrl+tab", "next_tab")]);
         let sig_c = conflict_signature(&detect_conflicts(&cfg, &snap_c));
-        assert_ne!(sig_a, sig_c, "different conflict set => different signature");
+        assert_ne!(
+            sig_a, sig_c,
+            "different conflict set => different signature"
+        );
 
         // No conflicts => empty signature.
         let clean = snapshot_with(vec![term_binding("cmd+t", "new_tab")]);

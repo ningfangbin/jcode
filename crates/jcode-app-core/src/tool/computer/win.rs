@@ -8,12 +8,19 @@ pub fn list_apps() -> Result<ToolOutput> {
     let script = "tell application \"System Events\" to get name of every application process whose background only is false";
     let res = osa::run_applescript(script)?;
     let apps: Vec<String> = res.split(", ").map(|s| s.trim().to_string()).collect();
-    Ok(ToolOutput::new(format!("Running apps ({}):\n{}", apps.len(), apps.join("\n")))
-        .with_title("list_apps"))
+    Ok(ToolOutput::new(format!(
+        "Running apps ({}):\n{}",
+        apps.len(),
+        apps.join("\n")
+    ))
+    .with_title("list_apps"))
 }
 
 pub fn activate_app(app: &str) -> Result<ToolOutput> {
-    osa::run_applescript(&format!("tell application {} to activate", osa::as_quote(app)))?;
+    osa::run_applescript(&format!(
+        "tell application {} to activate",
+        osa::as_quote(app)
+    ))?;
     Ok(ToolOutput::new(format!("activated {app}")))
 }
 
@@ -69,7 +76,11 @@ out.join('\n');
     let res = osa::run_jxa(script)?;
     Ok(ToolOutput::new(format!(
         "Windows (id  owner  title  bounds):\n{}",
-        if res.trim().is_empty() { "(none)" } else { &res }
+        if res.trim().is_empty() {
+            "(none)"
+        } else {
+            &res
+        }
     ))
     .with_title("list_windows"))
 }
@@ -89,17 +100,25 @@ pub fn focus_window(app: &str) -> Result<ToolOutput> {
 pub fn move_window(app: &str, x: f64, y: f64) -> Result<ToolOutput> {
     osa::run_applescript(&format!(
         "tell application \"System Events\" to set position of front window of (first process whose name is {}) to {{{x}, {y}}}",
-        osa::as_quote(app), x = x as i64, y = y as i64
+        osa::as_quote(app),
+        x = x as i64,
+        y = y as i64
     ))?;
-    Ok(ToolOutput::new(format!("moved {app} front window to ({x:.0},{y:.0})")))
+    Ok(ToolOutput::new(format!(
+        "moved {app} front window to ({x:.0},{y:.0})"
+    )))
 }
 
 pub fn resize_window(app: &str, w: f64, h: f64) -> Result<ToolOutput> {
     osa::run_applescript(&format!(
         "tell application \"System Events\" to set size of front window of (first process whose name is {}) to {{{w}, {h}}}",
-        osa::as_quote(app), w = w as i64, h = h as i64
+        osa::as_quote(app),
+        w = w as i64,
+        h = h as i64
     ))?;
-    Ok(ToolOutput::new(format!("resized {app} front window to {w:.0}x{h:.0}")))
+    Ok(ToolOutput::new(format!(
+        "resized {app} front window to {w:.0}x{h:.0}"
+    )))
 }
 
 pub fn minimize_window(app: &str) -> Result<ToolOutput> {

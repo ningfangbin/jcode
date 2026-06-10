@@ -54,7 +54,10 @@ fn tell(app: &str, body: &str) -> String {
 /// Dump the AX tree of an app (or the frontmost app) to a given depth.
 pub fn ui_tree(app: Option<&str>, depth: u32) -> Result<ToolOutput> {
     let target = match app {
-        Some(a) => format!("first application process whose name is {}", osa::as_quote(a)),
+        Some(a) => format!(
+            "first application process whose name is {}",
+            osa::as_quote(a)
+        ),
         None => "first application process whose frontmost is true".to_string(),
     };
     let script = format!(
@@ -211,7 +214,10 @@ end tell
 
 /// Perform AXPress on an element (background click).
 pub fn press(handle: &ElementHandle) -> Result<ToolOutput> {
-    let body = format!("perform action \"AXPress\" of ({})", handle.resolve_script());
+    let body = format!(
+        "perform action \"AXPress\" of ({})",
+        handle.resolve_script()
+    );
     osa::run_applescript_timeout(&tell(&handle.app, &body), Duration::from_secs(10))?;
     Ok(ToolOutput::new(format!(
         "pressed element {:?} in {} (no cursor movement)",
@@ -356,7 +362,9 @@ end tell
         y = y
     );
     let res = osa::run_applescript_timeout(&script, Duration::from_secs(12))?;
-    Ok(ToolOutput::new(format!("Deepest element at ({x:.0},{y:.0}) in {app}:\n{res}"))
-        .with_title("element_at")
-        .with_metadata(json!({"app": app, "x": x, "y": y})))
+    Ok(ToolOutput::new(format!(
+        "Deepest element at ({x:.0},{y:.0}) in {app}:\n{res}"
+    ))
+    .with_title("element_at")
+    .with_metadata(json!({"app": app, "x": x, "y": y})))
 }

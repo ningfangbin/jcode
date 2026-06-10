@@ -1,6 +1,6 @@
 use super::{SetupHintsState, StartupHints, read_choice};
-use jcode_storage as storage;
 use anyhow::Result;
+use jcode_storage as storage;
 use std::io::{self, Write};
 
 fn detect_terminal() -> &'static str {

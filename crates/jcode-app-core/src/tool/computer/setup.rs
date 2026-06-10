@@ -24,7 +24,9 @@ fn screen_recording_ok() -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
-        && std::fs::metadata(&tmp).map(|m| m.len() > 0).unwrap_or(false);
+        && std::fs::metadata(&tmp)
+            .map(|m| m.len() > 0)
+            .unwrap_or(false);
     let _ = std::fs::remove_file(&tmp);
     ok
 }
@@ -47,7 +49,10 @@ pub fn check_permissions() -> Result<ToolOutput> {
     let mut lines = vec![
         format!("Accessibility (input + AX control): {}", yes_no(ax)),
         format!("Screen Recording (screenshots/OCR): {}", yes_no(screen)),
-        format!("Swift toolchain (for OCR):          {}", if swift { "present" } else { "missing" }),
+        format!(
+            "Swift toolchain (for OCR):          {}",
+            if swift { "present" } else { "missing" }
+        ),
     ];
     if !ax || !screen {
         lines.push("Run action='setup' to request these and open the right settings pane.".into());
@@ -63,7 +68,10 @@ pub fn setup() -> Result<ToolOutput> {
 
     let ax0 = accessibility_ok();
     let screen0 = screen_recording_ok();
-    log.push(format!("Initial: accessibility={}, screen_recording={}", ax0, screen0));
+    log.push(format!(
+        "Initial: accessibility={}, screen_recording={}",
+        ax0, screen0
+    ));
 
     // Trigger the Screen Recording prompt by attempting a capture (already done
     // in screen_recording_ok). For Accessibility, prompt + pre-add jcode by
@@ -102,13 +110,20 @@ pub fn setup() -> Result<ToolOutput> {
         }
         log.push(format!(
             "Accessibility after wait: {}",
-            if granted { "granted" } else { "still not granted (toggle it, then re-run check_permissions)" }
+            if granted {
+                "granted"
+            } else {
+                "still not granted (toggle it, then re-run check_permissions)"
+            }
         ));
     }
 
     let ax = accessibility_ok();
     let screen = screen_recording_ok();
-    log.push(format!("Final: accessibility={}, screen_recording={}", ax, screen));
+    log.push(format!(
+        "Final: accessibility={}, screen_recording={}",
+        ax, screen
+    ));
     if !ax {
         log.push(
             "NOTE: the Accessibility toggle cannot be enabled programmatically (macOS security). \

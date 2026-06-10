@@ -293,14 +293,18 @@ fn dispatch(action: &str, input: &ComputerInput) -> Result<ToolOutput> {
         "screenshot" => screen::screenshot(),
         "ocr" => screen::ocr(input.region),
         "window_screenshot" => {
-            let id = input.window_id.context("window_screenshot requires `window_id`")?;
+            let id = input
+                .window_id
+                .context("window_screenshot requires `window_id`")?;
             screen::window_screenshot(id)
         }
         "ui" => ax::ui_tree(input.app.as_deref(), input.depth.unwrap_or(12)),
         "cursor" => {
             let p = input::current_cursor()?;
-            Ok(ToolOutput::new(format!("cursor at ({:.0}, {:.0})", p.x, p.y))
-                .with_metadata(json!({ "x": p.x, "y": p.y })))
+            Ok(
+                ToolOutput::new(format!("cursor at ({:.0}, {:.0})", p.x, p.y))
+                    .with_metadata(json!({ "x": p.x, "y": p.y })),
+            )
         }
 
         // ---- coordinate input (visible) ----
@@ -311,15 +315,24 @@ fn dispatch(action: &str, input: &ComputerInput) -> Result<ToolOutput> {
         }
         "click" => {
             let p = input::click(input.x, input.y, input::Button::Left, 1)?;
-            Ok(ToolOutput::new(format!("clicked at ({:.0}, {:.0})", p.x, p.y)))
+            Ok(ToolOutput::new(format!(
+                "clicked at ({:.0}, {:.0})",
+                p.x, p.y
+            )))
         }
         "double_click" => {
             let p = input::click(input.x, input.y, input::Button::Left, 2)?;
-            Ok(ToolOutput::new(format!("double-clicked at ({:.0}, {:.0})", p.x, p.y)))
+            Ok(ToolOutput::new(format!(
+                "double-clicked at ({:.0}, {:.0})",
+                p.x, p.y
+            )))
         }
         "right_click" => {
             let p = input::click(input.x, input.y, input::Button::Right, 1)?;
-            Ok(ToolOutput::new(format!("right-clicked at ({:.0}, {:.0})", p.x, p.y)))
+            Ok(ToolOutput::new(format!(
+                "right-clicked at ({:.0}, {:.0})",
+                p.x, p.y
+            )))
         }
         "drag" => {
             let (x, y) = require_xy(input)?;
@@ -349,7 +362,10 @@ fn dispatch(action: &str, input: &ComputerInput) -> Result<ToolOutput> {
                 .filter(|s| !s.is_empty())
                 .context("action='type' requires non-empty `text`")?;
             input::type_text(text)?;
-            Ok(ToolOutput::new(format!("typed {} characters", text.chars().count())))
+            Ok(ToolOutput::new(format!(
+                "typed {} characters",
+                text.chars().count()
+            )))
         }
         "key" => {
             let keys = input
@@ -372,7 +388,10 @@ fn dispatch(action: &str, input: &ComputerInput) -> Result<ToolOutput> {
 
         // ---- AX background actions (Tier 1) ----
         "find_element" => {
-            let app = input.app.as_deref().context("find_element requires `app`")?;
+            let app = input
+                .app
+                .as_deref()
+                .context("find_element requires `app`")?;
             ax::find_element(
                 app,
                 input.role.as_deref(),
@@ -389,16 +408,25 @@ fn dispatch(action: &str, input: &ComputerInput) -> Result<ToolOutput> {
         "press" => ax::press(&parse_element(input)?),
         "get_value" => ax::get_value(&parse_element(input)?),
         "set_value" => {
-            let v = input.value.as_deref().context("set_value requires `value`")?;
+            let v = input
+                .value
+                .as_deref()
+                .context("set_value requires `value`")?;
             ax::set_value(&parse_element(input)?, v)
         }
         "perform_action" => {
-            let a = input.ax_action.as_deref().context("perform_action requires `ax_action`")?;
+            let a = input
+                .ax_action
+                .as_deref()
+                .context("perform_action requires `ax_action`")?;
             ax::perform_action(&parse_element(input)?, a)
         }
         "select_menu" => {
             let app = input.app.as_deref().context("select_menu requires `app`")?;
-            let path = input.menu_path.as_ref().context("select_menu requires `menu_path`")?;
+            let path = input
+                .menu_path
+                .as_ref()
+                .context("select_menu requires `menu_path`")?;
             ax::select_menu(app, path)
         }
 
@@ -424,20 +452,32 @@ fn dispatch(action: &str, input: &ComputerInput) -> Result<ToolOutput> {
         // ---- clipboard / scripting / system (Tier 3/4) ----
         "get_clipboard" => sys::get_clipboard(),
         "set_clipboard" => {
-            let t = input.text.as_deref().context("set_clipboard requires `text`")?;
+            let t = input
+                .text
+                .as_deref()
+                .context("set_clipboard requires `text`")?;
             sys::set_clipboard(t)
         }
         "run_applescript" => {
-            let s = input.script.as_deref().context("run_applescript requires `script`")?;
+            let s = input
+                .script
+                .as_deref()
+                .context("run_applescript requires `script`")?;
             sys::run_applescript(s)
         }
         "run_jxa" => {
-            let s = input.script.as_deref().context("run_jxa requires `script`")?;
+            let s = input
+                .script
+                .as_deref()
+                .context("run_jxa requires `script`")?;
             sys::run_jxa(s)
         }
         "wait_for" => {
             let app = input.app.as_deref().context("wait_for requires `app`")?;
-            let c = input.contains.as_deref().context("wait_for requires `contains`")?;
+            let c = input
+                .contains
+                .as_deref()
+                .context("wait_for requires `contains`")?;
             sys::wait_for(app, c, input.timeout_ms.unwrap_or(10_000))
         }
         "notify" => {
@@ -446,7 +486,9 @@ fn dispatch(action: &str, input: &ComputerInput) -> Result<ToolOutput> {
         }
         "system_state" => sys::system_state(),
         "set_brightness" => {
-            let l = input.level.context("set_brightness requires `level` (0..1)")?;
+            let l = input
+                .level
+                .context("set_brightness requires `level` (0..1)")?;
             sys::set_brightness(l)
         }
 
@@ -474,14 +516,13 @@ fn req_app<'a>(input: &'a ComputerInput) -> Result<&'a str> {
 
 #[cfg(target_os = "macos")]
 fn parse_element(input: &ComputerInput) -> Result<ax::ElementHandle> {
-    let raw = input
-        .element
-        .clone()
-        .context("this action requires an `element` handle {app, path:[...]} from find_element/ui")?;
+    let raw = input.element.clone().context(
+        "this action requires an `element` handle {app, path:[...]} from find_element/ui",
+    )?;
     serde_json::from_value(raw).context("invalid `element` handle")
 }
 
 #[cfg(all(test, target_os = "macos"))]
-mod tests;
-#[cfg(all(test, target_os = "macos"))]
 mod coverage_tests;
+#[cfg(all(test, target_os = "macos"))]
+mod tests;

@@ -767,9 +767,7 @@ pub fn render_image_widget_fit_stable(
     }
 
     let visible_width = image_area.width.min(full_cols);
-    let visible_height = image_area
-        .height
-        .min(full_rows.saturating_sub(skip_rows));
+    let visible_height = image_area.height.min(full_rows.saturating_sub(skip_rows));
 
     if let Ok(mut dbg) = MERMAID_DEBUG.lock() {
         dbg.stats.image_state_hits += 1;

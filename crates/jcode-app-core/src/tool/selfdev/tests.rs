@@ -964,8 +964,8 @@ fn freshly_queued_request_survives_reconcile_before_task_metadata_exists() {
     };
     request.save().expect("save fresh request");
 
-    let pending = BuildRequest::pending_requests_for_scope(&source.worktree_scope)
-        .expect("pending requests");
+    let pending =
+        BuildRequest::pending_requests_for_scope(&source.worktree_scope).expect("pending requests");
     assert!(
         pending
             .iter()
@@ -1230,8 +1230,8 @@ fn reconcile_keeps_running_request_not_yet_registered_in_live_task_map() {
     };
     request.save().expect("save racing request");
 
-    let pending = BuildRequest::pending_requests_for_scope(&source.worktree_scope)
-        .expect("pending requests");
+    let pending =
+        BuildRequest::pending_requests_for_scope(&source.worktree_scope).expect("pending requests");
     assert!(
         pending
             .iter()

@@ -237,7 +237,10 @@ mod tests {
     #[test]
     fn parses_jcode_binding_strings() {
         assert_eq!(KeyChord::parse("ctrl+k").unwrap().canonical(), "ctrl+k");
-        assert_eq!(KeyChord::parse("alt+right").unwrap().canonical(), "alt+right");
+        assert_eq!(
+            KeyChord::parse("alt+right").unwrap().canonical(),
+            "alt+right"
+        );
         assert_eq!(
             KeyChord::parse("ctrl+shift+tab").unwrap().canonical(),
             "ctrl+shift+tab"

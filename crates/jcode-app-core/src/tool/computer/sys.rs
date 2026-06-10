@@ -31,7 +31,10 @@ pub fn set_clipboard(text: &str) -> Result<ToolOutput> {
     child
         .wait()
         .map_err(|e| anyhow::anyhow!("pbcopy failed: {e}"))?;
-    Ok(ToolOutput::new(format!("copied {} chars to clipboard", text.chars().count())))
+    Ok(ToolOutput::new(format!(
+        "copied {} chars to clipboard",
+        text.chars().count()
+    )))
 }
 
 pub fn run_applescript(script: &str) -> Result<ToolOutput> {

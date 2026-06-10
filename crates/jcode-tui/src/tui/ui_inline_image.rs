@@ -101,11 +101,7 @@ pub(crate) fn register_payload(id: u64, media_type: &str, data_b64: &str) {
 /// Ensure the image with `id` is materialized (decoded + cached) so it can be
 /// drawn. Returns true on success. Cheap and idempotent on repeat.
 pub(crate) fn materialize_visible(id: u64) -> bool {
-    if let Some((media_type, data_b64)) = PAYLOAD_REGISTRY
-        .lock()
-        .ok()
-        .and_then(|reg| reg.get(id))
-    {
+    if let Some((media_type, data_b64)) = PAYLOAD_REGISTRY.lock().ok().and_then(|reg| reg.get(id)) {
         return mermaid::materialize_inline_image(&media_type, &data_b64).is_some();
     }
     false
@@ -265,12 +261,7 @@ pub(crate) fn resolve_anchored_items_cached(
 /// capped at `cap_rows`. `cols` includes the 2-cell left border, matching what
 /// the draw step actually paints, so layout (e.g. info widget placement) can
 /// know the real horizontal extent.
-fn fit_geometry_with_cap(
-    width: u32,
-    height: u32,
-    chat_width: u16,
-    cap_rows: u16,
-) -> (u16, u16) {
+fn fit_geometry_with_cap(width: u32, height: u32, chat_width: u16, cap_rows: u16) -> (u16, u16) {
     if width == 0 || height == 0 {
         return (MIN_IMAGE_ROWS, chat_width.min(2));
     }
@@ -303,7 +294,11 @@ fn fit_geometry_with_cap(
     let cols = (div_ceil_u32(final_w_px.max(1), cell_w) as u16)
         .saturating_add(2)
         .min(chat_width);
-    (rows.min(cap_rows.min(u16::MAX as u32) as u16).max(MIN_IMAGE_ROWS), cols)
+    (
+        rows.min(cap_rows.min(u16::MAX as u32) as u16)
+            .max(MIN_IMAGE_ROWS),
+        cols,
+    )
 }
 
 /// Compute `(rows, cols)` for an inline image at `chat_width`, given a viewport
@@ -346,10 +341,7 @@ pub(crate) fn image_label_line(item: &InlineImageItem) -> Line<'static> {
 /// Lines for images anchored at a transcript message: per image, a leading
 /// blank, a dim label, a geometry-encoding marker line plus blank placeholder
 /// rows (recognized by the image-region scan), and a trailing blank.
-pub(crate) fn anchored_image_lines(
-    items: &[InlineImageItem],
-    width: u16,
-) -> Vec<Line<'static>> {
+pub(crate) fn anchored_image_lines(items: &[InlineImageItem], width: u16) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for item in items {
         lines.push(Line::from(""));
@@ -404,7 +396,10 @@ pub(crate) fn build_section(
     }
 
     let line_count = lines.len();
-    let plain: Vec<String> = lines.iter().map(jcode_tui_render::line_plain_text).collect();
+    let plain: Vec<String> = lines
+        .iter()
+        .map(jcode_tui_render::line_plain_text)
+        .collect();
 
     PreparedMessages {
         wrapped_lines: lines,
@@ -484,9 +479,11 @@ mod tests {
     fn fit_geometry_small_window_never_exceeds_chat_width() {
         for chat_width in [1u16, 2, 3, 5, 10] {
             for viewport_height in [1u16, 2, 5, 10] {
-                let (rows, cols) =
-                    fit_geometry(1920, 1080, chat_width, viewport_height);
-                assert!(cols <= chat_width.max(2), "cols {cols} > width {chat_width}");
+                let (rows, cols) = fit_geometry(1920, 1080, chat_width, viewport_height);
+                assert!(
+                    cols <= chat_width.max(2),
+                    "cols {cols} > width {chat_width}"
+                );
                 assert!(rows >= MIN_IMAGE_ROWS);
             }
         }
@@ -504,7 +501,11 @@ mod tests {
         let items = vec![item(600, 400)];
         let section = build_section(&items, 80, 40, false);
         let region = &section.image_regions[0];
-        assert!(region.width > 2, "region width should include the image, got {}", region.width);
+        assert!(
+            region.width > 2,
+            "region width should include the image, got {}",
+            region.width
+        );
         assert!(region.width <= 80);
     }
 
@@ -530,7 +531,10 @@ mod tests {
         }
         // A dim label line precedes the first region.
         let label_line = jcode_tui_render::line_plain_text(&section.wrapped_lines[1]);
-        assert!(label_line.contains("test.png"), "label missing: {label_line:?}");
+        assert!(
+            label_line.contains("test.png"),
+            "label missing: {label_line:?}"
+        );
     }
 
     #[test]
