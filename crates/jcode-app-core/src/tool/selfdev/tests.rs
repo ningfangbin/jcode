@@ -1029,7 +1029,11 @@ async fn build_ignores_stale_pending_requests_when_computing_queue_position() {
         repo_scope: source.repo_scope.clone(),
         worktree_scope: source.worktree_scope.clone(),
         command: "scripts/dev_cargo.sh build --profile selfdev -p jcode --bin jcode".to_string(),
-        requested_at: Utc::now().to_rfc3339(),
+        // Backdated beyond the 30s bootstrap grace so reconciliation treats the
+        // dead-task request as genuinely stale (a fresh timestamp would keep it
+        // alive and Queued, which is the bootstrap-race protection, not the
+        // staleness path under test).
+        requested_at: (Utc::now() - chrono::Duration::seconds(120)).to_rfc3339(),
         started_at: Some(Utc::now().to_rfc3339()),
         completed_at: None,
         state: BuildRequestState::Queued,
