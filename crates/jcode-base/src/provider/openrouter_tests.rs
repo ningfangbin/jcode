@@ -1227,6 +1227,7 @@ fn make_provider() -> OpenRouterProvider {
         supports_provider_features: true,
         supports_model_catalog: true,
         profile_id: None,
+        reasoning_effort_support: None,
         max_tokens: None,
         extra_body: None,
         static_models: Vec::new(),
@@ -1254,6 +1255,7 @@ fn make_custom_compatible_provider() -> OpenRouterProvider {
         supports_provider_features: false,
         supports_model_catalog: true,
         profile_id: None,
+        reasoning_effort_support: None,
         max_tokens: None,
         extra_body: None,
         static_models: Vec::new(),
@@ -1366,7 +1368,7 @@ fn non_deepseek_compatible_profile_does_not_expose_reasoning_effort() {
         .set_reasoning_effort("max")
         .expect_err("generic compatible profile should not expose DeepSeek effort UX");
     assert!(
-        error.to_string().contains("OpenRouter and DeepSeek"),
+        error.to_string().contains("not supported"),
         "unexpected error: {error:?}"
     );
 }
@@ -1614,6 +1616,7 @@ fn openai_compatible_model_catalog_refresh_calls_models_endpoint_and_updates_dis
         supports_provider_features: false,
         supports_model_catalog: true,
         profile_id: None,
+        reasoning_effort_support: None,
         static_models: vec!["static-login-flow-fallback".to_string()],
         send_openrouter_headers: false,
         ..make_custom_compatible_provider()
@@ -1663,6 +1666,7 @@ fn openai_compatible_model_catalog_refresh_calls_models_endpoint_and_updates_dis
         supports_provider_features: false,
         supports_model_catalog: true,
         profile_id: None,
+        reasoning_effort_support: None,
         send_openrouter_headers: false,
         ..make_custom_compatible_provider()
     };
@@ -2568,4 +2572,94 @@ fn midstream_transport_fault_emits_retry_rollback_before_replay() {
             "partial output duplicated without an interleaved rollback"
         );
     });
+}
+
+/// Issue #352: reasoning effort must follow the *model family*, not just the
+/// dedicated `deepseek` profile id. A custom compat endpoint (named profile or
+/// generic openai-compatible) serving a DeepSeek model supports `/effort`.
+#[test]
+fn compat_profile_serving_deepseek_model_supports_reasoning_effort() {
+    let provider = make_custom_compatible_provider();
+
+    // Non-DeepSeek model on a custom endpoint: no effort support.
+    provider.set_model("some-random-model").unwrap();
+    assert!(provider.available_efforts().is_empty());
+    assert!(provider.set_reasoning_effort("high").is_err());
+    assert_eq!(provider.reasoning_effort(), None);
+
+    // DeepSeek-family model: DeepSeek-style efforts become available.
+    provider.set_model("deepseek-v4-flash").unwrap();
+    assert_eq!(
+        provider.available_efforts(),
+        vec!["none", "low", "medium", "high", "max"]
+    );
+    provider
+        .set_reasoning_effort("high")
+        .expect("deepseek model on compat endpoint accepts effort");
+    assert_eq!(provider.reasoning_effort(), Some("high".to_string()));
+}
+
+/// Issue #352: named-profile config can override effort support explicitly in
+/// both directions.
+#[test]
+fn named_profile_supports_reasoning_effort_config_override() {
+    let force_on = OpenRouterProvider {
+        reasoning_effort_support: Some(true),
+        ..make_custom_compatible_provider()
+    };
+    force_on.set_model("not-a-deepseek-model").unwrap();
+    assert_eq!(
+        force_on.available_efforts(),
+        vec!["none", "low", "medium", "high", "max"]
+    );
+    force_on
+        .set_reasoning_effort("medium")
+        .expect("explicit supports_reasoning_effort=true enables effort");
+    assert_eq!(force_on.reasoning_effort(), Some("medium".to_string()));
+
+    let force_off = OpenRouterProvider {
+        reasoning_effort_support: Some(false),
+        ..make_custom_compatible_provider()
+    };
+    force_off.set_model("deepseek-v4-flash").unwrap();
+    assert!(force_off.available_efforts().is_empty());
+    assert!(
+        force_off.set_reasoning_effort("high").is_err(),
+        "explicit supports_reasoning_effort=false suppresses model auto-detection"
+    );
+}
+
+/// Issue #352: named profiles construct with the user's configured
+/// `openai_reasoning_effort` when the profile supports effort, instead of
+/// silently ignoring the config.
+#[test]
+fn named_profile_construction_reads_openai_reasoning_effort_config() {
+    let _lock = ENV_LOCK.lock();
+    let _namespace = EnvVarGuard::remove("JCODE_OPENROUTER_CACHE_NAMESPACE");
+
+    let config = crate::config::NamedProviderConfig {
+        base_url: "https://compat.example.test/v1".to_string(),
+        api_key: Some("test".to_string()),
+        default_model: Some("deepseek-v4".to_string()),
+        supports_reasoning_effort: Some(true),
+        ..Default::default()
+    };
+
+    let provider =
+        OpenRouterProvider::new_named_openai_compatible("custom", &config).expect("provider");
+    // The config default is only applied when openai_reasoning_effort is set;
+    // with no config value the provider starts with no effort but still
+    // supports setting one.
+    let initial = provider.reasoning_effort();
+    let configured = crate::config::config()
+        .provider
+        .openai_reasoning_effort
+        .clone();
+    match configured {
+        Some(_) => assert!(initial.is_some(), "configured effort must be honored"),
+        None => assert_eq!(initial, None),
+    }
+    provider
+        .set_reasoning_effort("max")
+        .expect("explicitly-enabled profile accepts effort");
 }

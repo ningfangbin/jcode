@@ -93,7 +93,7 @@ impl Provider for OpenRouterProvider {
 
         let mut sent_reasoning_config = false;
         if let Some(effort) = reasoning_effort.as_deref() {
-            if Self::profile_supports_reasoning_effort(self.profile_id.as_deref()) {
+            if self.supports_deepseek_reasoning_effort() {
                 if effort != "none" {
                     request["reasoning_effort"] = serde_json::json!(effort);
                     sent_reasoning_config = true;
@@ -342,10 +342,7 @@ impl Provider for OpenRouterProvider {
     }
 
     fn reasoning_effort(&self) -> Option<String> {
-        if !Self::supports_reasoning_effort_for_profile(
-            self.profile_id.as_deref(),
-            self.send_openrouter_headers,
-        ) {
+        if !self.supports_any_reasoning_effort() {
             return None;
         }
         self.reasoning_effort
@@ -355,16 +352,12 @@ impl Provider for OpenRouterProvider {
     }
 
     fn set_reasoning_effort(&self, effort: &str) -> Result<()> {
-        if !Self::supports_reasoning_effort_for_profile(
-            self.profile_id.as_deref(),
-            self.send_openrouter_headers,
-        ) {
+        if !self.supports_any_reasoning_effort() {
             anyhow::bail!(
-                "Reasoning effort is only supported for OpenRouter and DeepSeek direct profiles"
+                "Reasoning effort is not supported by the current model/profile. It works for OpenRouter, DeepSeek-family models, and profiles with supports_reasoning_effort = true."
             );
         }
-        let normalized =
-            Self::normalize_reasoning_effort_for_profile(self.profile_id.as_deref(), effort);
+        let normalized = self.normalize_reasoning_effort_for_self(effort);
         let mut current = self.reasoning_effort.try_write().map_err(|_| {
             anyhow::anyhow!("Cannot change reasoning effort while a request is in progress")
         })?;
@@ -373,7 +366,7 @@ impl Provider for OpenRouterProvider {
     }
 
     fn available_efforts(&self) -> Vec<&'static str> {
-        if Self::profile_supports_reasoning_effort(self.profile_id.as_deref()) {
+        if self.supports_deepseek_reasoning_effort() {
             vec!["none", "low", "medium", "high", "max"]
         } else if Self::profile_supports_unified_reasoning(
             self.profile_id.as_deref(),
@@ -644,6 +637,7 @@ impl Provider for OpenRouterProvider {
             supports_provider_features: self.supports_provider_features,
             supports_model_catalog: self.supports_model_catalog,
             profile_id: self.profile_id.clone(),
+            reasoning_effort_support: self.reasoning_effort_support,
             max_tokens: self.max_tokens,
             extra_body: self.extra_body.clone(),
             static_models: self.static_models.clone(),
