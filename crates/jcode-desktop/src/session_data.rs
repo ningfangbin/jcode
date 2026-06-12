@@ -18,6 +18,10 @@ const SESSION_DETAIL_CHAR_LIMIT: usize = 128;
 const SESSION_CARD_TRANSCRIPT_MESSAGE_LIMIT: usize = 64;
 const SESSION_CARD_TRANSCRIPT_CHAR_LIMIT: usize = 48_000;
 const SESSION_CARD_TRANSCRIPT_MESSAGE_CHAR_LIMIT: usize = 4_000;
+/// Upper bound on session files parsed when resolving a transcript whose
+/// internal id does not match its file stem. Keeps switcher resume latency
+/// bounded on machines with very large sessions directories.
+const TRANSCRIPT_FALLBACK_SCAN_LIMIT: usize = 256;
 
 pub fn load_recent_session_cards() -> Result<Vec<SessionCard>> {
     load_recent_session_cards_with_limit(DEFAULT_SESSION_LIMIT)
@@ -56,29 +60,34 @@ pub fn load_session_transcript_by_id(
         return Ok(None);
     }
 
-    for entry in fs::read_dir(&sessions_dir)
+    // Fallback for sessions whose internal id differs from the file stem.
+    // Scan newest-first and bound the number of files parsed: this runs
+    // synchronously on the UI thread when resuming from the session
+    // switcher, and an unbounded scan over a large sessions directory
+    // (e.g. 100k+ files) freezes the app for tens of seconds.
+    let mut candidates = fs::read_dir(&sessions_dir)
         .with_context(|| format!("failed to read {}", sessions_dir.display()))?
-    {
-        let Ok(entry) = entry else {
-            continue;
-        };
-        let path = entry.path();
-        if session_file_candidate(path.clone()).is_none() {
-            continue;
-        }
-        let session = match load_stored_session(&path) {
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| session_file_candidate(entry.path()))
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.modified));
+
+    for candidate in candidates.into_iter().take(TRANSCRIPT_FALLBACK_SCAN_LIMIT) {
+        let session = match load_stored_session(&candidate.path) {
             Ok(session) => session,
             Err(error) => {
                 crate::desktop_log::warn(format_args!(
                     "jcode-desktop: skipped transcript {}: {error:#}",
-                    path.display()
+                    candidate.path.display()
                 ));
                 continue;
             }
         };
         let id = stored_string(session.id.as_deref())
             .or_else(|| {
-                path.file_stem()
+                candidate
+                    .path
+                    .file_stem()
                     .map(|stem| stem.to_string_lossy().into_owned())
             })
             .unwrap_or_default();
