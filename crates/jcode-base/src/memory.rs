@@ -627,7 +627,12 @@ impl MemoryManager {
         scope: MemoryScope,
     ) -> Result<Vec<(MemoryEntry, f32)>> {
         let entries = self.collect_memories_with_embeddings_scoped(scope)?;
-        Ok(Self::hybrid_fuse(entries, query_text, query_embedding, limit))
+        Ok(Self::hybrid_fuse(
+            entries,
+            query_text,
+            query_embedding,
+            limit,
+        ))
     }
 
     /// Pull pool, rank by dense and BM25 separately, fuse with RRF.

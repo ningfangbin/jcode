@@ -127,10 +127,7 @@ impl Sidecar {
     /// Construct a sidecar pinned to a specific OpenAI model via Codex/OpenAI
     /// OAuth, with an optional explicit reasoning effort (e.g. "none"/"minimal"
     /// for no-thinking). Used by the memory recall benchmark judge.
-    pub fn with_openai_model(
-        model: impl Into<String>,
-        reasoning_effort: Option<String>,
-    ) -> Self {
+    pub fn with_openai_model(model: impl Into<String>, reasoning_effort: Option<String>) -> Self {
         Self {
             client: crate::provider::shared_http_client(),
             model: model.into(),
@@ -179,10 +176,8 @@ impl Sidecar {
             resolve_openai_request_model(&self.model, is_chatgpt_mode);
         // An explicit reasoning override (e.g. benchmark judge pinning GPT-5.5
         // to no-thinking) always wins over the per-model default.
-        let primary_reasoning: Option<&str> = self
-            .reasoning_override
-            .as_deref()
-            .or(resolved_reasoning);
+        let primary_reasoning: Option<&str> =
+            self.reasoning_override.as_deref().or(resolved_reasoning);
 
         match self
             .complete_openai_with_model(

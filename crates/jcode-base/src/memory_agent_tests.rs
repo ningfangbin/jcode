@@ -97,7 +97,10 @@ fn apply_confidence_updates_batches_boost_and_decay() {
         let keep_after = conf_before(&keep);
         let stale_after = conf_before(&stale);
         assert!(keep_after > keep_before, "verified confidence should rise");
-        assert!(stale_after < stale_before, "rejected confidence should fall");
+        assert!(
+            stale_after < stale_before,
+            "rejected confidence should fall"
+        );
     }));
 
     match old {

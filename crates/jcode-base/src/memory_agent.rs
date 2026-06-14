@@ -532,8 +532,11 @@ impl MemoryAgent {
         // fused with RRF). Benchmarking showed the old dense-only path with a
         // 0.5 cosine floor surfaced essentially nothing on real session windows;
         // hybrid recovers recall and lets the sidecar/rerank do the filtering.
-        let candidates =
-            memory_manager.find_similar_hybrid(&context, &context_embedding, memory::EMBEDDING_MAX_HITS)?;
+        let candidates = memory_manager.find_similar_hybrid(
+            &context,
+            &context_embedding,
+            memory::EMBEDDING_MAX_HITS,
+        )?;
 
         let embedding_latency = start.elapsed().as_millis() as u64;
         memory::add_event(MemoryEventKind::EmbeddingComplete {

@@ -671,8 +671,8 @@ fn hybrid_fuse_returns_dense_hits_without_lexical_overlap() {
     // the dense-nearest memory (fusion falls back to the dense ranking).
     let near = MemoryEntry::new(MemoryCategory::Fact, "alpha bravo charlie")
         .with_embedding(vec![1.0, 0.0]);
-    let far = MemoryEntry::new(MemoryCategory::Fact, "delta echo foxtrot")
-        .with_embedding(vec![0.0, 1.0]);
+    let far =
+        MemoryEntry::new(MemoryCategory::Fact, "delta echo foxtrot").with_embedding(vec![0.0, 1.0]);
 
     let ranked = MemoryManager::hybrid_fuse(
         vec![near.clone(), far],
@@ -682,7 +682,10 @@ fn hybrid_fuse_returns_dense_hits_without_lexical_overlap() {
     );
 
     assert!(!ranked.is_empty());
-    assert_eq!(ranked[0].0.id, near.id, "dense-nearest memory should rank first");
+    assert_eq!(
+        ranked[0].0.id, near.id,
+        "dense-nearest memory should rank first"
+    );
 }
 
 #[test]
@@ -741,10 +744,16 @@ The bug is in the mouse delta calc.";
     let focused = super::focus_query_text(raw);
 
     // System-reminder block is gone.
-    assert!(!focused.contains("Session Context"), "reminder not stripped: {focused}");
+    assert!(
+        !focused.contains("Session Context"),
+        "reminder not stripped: {focused}"
+    );
     assert!(!focused.contains("<system-reminder>"));
     // Tool noise is gone.
-    assert!(!focused.contains("[Tool:"), "tool marker not stripped: {focused}");
+    assert!(
+        !focused.contains("[Tool:"),
+        "tool marker not stripped: {focused}"
+    );
     assert!(!focused.contains("[Result:"));
     // Role markers are gone.
     assert!(!focused.contains("User:"));
