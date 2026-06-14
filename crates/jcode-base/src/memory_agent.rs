@@ -1028,27 +1028,12 @@ impl MemoryAgent {
                 }
             }
 
-            // 2. Boost confidence for verified memories (they were actually useful)
-            let mut boosted = 0usize;
-            for id in &ctx.verified_ids {
-                match boost_memory_confidence(&memory_manager, id, 0.05) {
-                    Ok(()) => boosted += 1,
-                    Err(e) => {
-                        crate::logging::info(&format!("Confidence boost failed for {}: {}", id, e))
-                    }
-                }
-            }
-
-            // 3. Gentle decay for rejected memories (may be stale)
-            let mut decayed = 0usize;
-            for id in &ctx.rejected_ids {
-                match decay_memory_confidence(&memory_manager, id, 0.02) {
-                    Ok(()) => decayed += 1,
-                    Err(e) => {
-                        crate::logging::info(&format!("Confidence decay failed for {}: {}", id, e))
-                    }
-                }
-            }
+            // 2 + 3. Batch confidence updates: boost verified, decay rejected.
+            // Each graph is loaded and saved ONCE for the whole turn instead of
+            // once per id (graphs are multi-MB JSON; per-id round trips rewrote
+            // megabytes 5-10x per turn).
+            let (boosted, decayed) =
+                apply_confidence_updates(&memory_manager, &ctx.verified_ids, &ctx.rejected_ids);
             if boosted > 0 || decayed > 0 {
                 memory::add_event(MemoryEventKind::MaintenanceConfidence { boosted, decayed });
             }
@@ -1514,74 +1499,76 @@ async fn discover_links(manager: &MemoryManager, memory_ids: &[String]) -> Resul
     Ok(linked)
 }
 
-/// Boost a memory's confidence score
-fn boost_memory_confidence(manager: &MemoryManager, memory_id: &str, amount: f32) -> Result<()> {
-    // Load project graph first
-    let mut graph = manager.load_project_graph()?;
-    if graph.get_memory(memory_id).is_some() {
-        if let Some(entry) = graph.get_memory_mut(memory_id) {
-            entry.boost_confidence(amount);
-            let conf = entry.confidence;
-            manager.save_project_graph(&graph)?;
-            crate::logging::info(&format!(
-                "Boosted confidence for {} to {:.2}",
-                memory_id, conf
-            ));
-        }
-        return Ok(());
+/// Apply confidence boosts (verified) and decays (rejected) in a single pass
+/// over each graph. Loads and saves the project and global graphs at most ONCE
+/// each, instead of once per id, to avoid rewriting multi-MB JSON repeatedly.
+///
+/// Returns (boosted_count, decayed_count).
+fn apply_confidence_updates(
+    manager: &MemoryManager,
+    verified_ids: &[String],
+    rejected_ids: &[String],
+) -> (usize, usize) {
+    const BOOST: f32 = 0.05;
+    const DECAY: f32 = 0.02;
+
+    if verified_ids.is_empty() && rejected_ids.is_empty() {
+        return (0, 0);
     }
 
-    // Try global
-    let mut graph = manager.load_global_graph()?;
-    if graph.get_memory(memory_id).is_some() {
-        if let Some(entry) = graph.get_memory_mut(memory_id) {
-            entry.boost_confidence(amount);
-            let conf = entry.confidence;
-            manager.save_global_graph(&graph)?;
-            crate::logging::info(&format!(
-                "Boosted confidence for {} to {:.2}",
-                memory_id, conf
-            ));
+    let mut boosted = 0usize;
+    let mut decayed = 0usize;
+
+    // Process project then global; an id lives in exactly one graph, so once an
+    // update lands we don't need to touch it again.
+    for scope in ["project", "global"] {
+        let mut graph = match if scope == "project" {
+            manager.load_project_graph()
+        } else {
+            manager.load_global_graph()
+        } {
+            Ok(g) => g,
+            Err(e) => {
+                crate::logging::info(&format!(
+                    "Confidence update: failed to load {} graph: {}",
+                    scope, e
+                ));
+                continue;
+            }
+        };
+
+        let mut changed = false;
+        for id in verified_ids {
+            if let Some(entry) = graph.get_memory_mut(id) {
+                entry.boost_confidence(BOOST);
+                boosted += 1;
+                changed = true;
+            }
         }
-        return Ok(());
+        for id in rejected_ids {
+            if let Some(entry) = graph.get_memory_mut(id) {
+                entry.decay_confidence(DECAY);
+                decayed += 1;
+                changed = true;
+            }
+        }
+
+        if changed {
+            let saved = if scope == "project" {
+                manager.save_project_graph(&graph)
+            } else {
+                manager.save_global_graph(&graph)
+            };
+            if let Err(e) = saved {
+                crate::logging::info(&format!(
+                    "Confidence update: failed to save {} graph: {}",
+                    scope, e
+                ));
+            }
+        }
     }
 
-    Err(anyhow::anyhow!("Memory not found: {}", memory_id))
-}
-
-/// Decay a memory's confidence score
-fn decay_memory_confidence(manager: &MemoryManager, memory_id: &str, amount: f32) -> Result<()> {
-    // Load project graph first
-    let mut graph = manager.load_project_graph()?;
-    if graph.get_memory(memory_id).is_some() {
-        if let Some(entry) = graph.get_memory_mut(memory_id) {
-            entry.decay_confidence(amount);
-            let conf = entry.confidence;
-            manager.save_project_graph(&graph)?;
-            crate::logging::info(&format!(
-                "Decayed confidence for {} to {:.2}",
-                memory_id, conf
-            ));
-        }
-        return Ok(());
-    }
-
-    // Try global
-    let mut graph = manager.load_global_graph()?;
-    if graph.get_memory(memory_id).is_some() {
-        if let Some(entry) = graph.get_memory_mut(memory_id) {
-            entry.decay_confidence(amount);
-            let conf = entry.confidence;
-            manager.save_global_graph(&graph)?;
-            crate::logging::info(&format!(
-                "Decayed confidence for {} to {:.2}",
-                memory_id, conf
-            ));
-        }
-        return Ok(());
-    }
-
-    Err(anyhow::anyhow!("Memory not found: {}", memory_id))
+    (boosted, decayed)
 }
 
 /// Initialize and start the global memory agent
