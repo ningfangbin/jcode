@@ -289,6 +289,31 @@ fn schedule_prewarm(id: u64, target_cols: u16, target_rows: u16) {
     }
 }
 
+/// Warm an inline image that is *not* on screen yet so it is ready to draw the
+/// instant it scrolls into view. Unlike [`ensure_drawable`], this never blocks
+/// and never draws: if the image still needs decode/scale/transmit work it is
+/// scheduled on the background prewarm worker (deduped against in-flight and
+/// already-warm state), otherwise it is a cheap no-op.
+///
+/// Callers pass the same `(target_cols, target_rows)` placeholder geometry the
+/// draw path will use, so the prewarmed Kitty fit-state matches exactly and the
+/// first on-screen frame hits the `Ready` fast path with no rescale.
+pub(crate) fn prefetch(id: u64, target_cols: u16, target_rows: u16) {
+    let readiness = if mermaid::inline_image_is_materialized(id) {
+        mermaid::inline_fit_readiness(id, target_cols, target_rows, true)
+    } else {
+        mermaid::InlineFitReadiness::NeedsPrewarm
+    };
+    match readiness {
+        // Already drawable, or a protocol that builds its state synchronously
+        // at draw time (nothing useful to prewarm ahead).
+        mermaid::InlineFitReadiness::Ready | mermaid::InlineFitReadiness::Unsupported => {}
+        mermaid::InlineFitReadiness::NeedsPrewarm => {
+            schedule_prewarm(id, target_cols, target_rows);
+        }
+    }
+}
+
 fn resolve_item(image: &crate::session::RenderedImage) -> Option<InlineImageItem> {
     let (id, width, height) = mermaid::inline_image_dims(&image.media_type, &image.data)?;
     register_payload(id, &image.media_type, &image.data);
@@ -715,6 +740,21 @@ mod tests {
             "presence probe should hit after materialization"
         );
         assert!(materialize_visible(id), "repeat call stays true");
+    }
+
+    #[test]
+    fn prefetch_is_noop_for_materialized_image_without_kitty() {
+        // Without a Kitty picker the fit-state path is Unsupported, so a
+        // materialized image has nothing to prewarm: prefetch must be a cheap
+        // no-op (no panic, no scheduling) and the image stays materialized.
+        let id = mermaid::inline_image_id("image/png", MATERIALIZE_PNG_B64);
+        register_payload(id, "image/png", MATERIALIZE_PNG_B64);
+        assert!(materialize_visible(id));
+        prefetch(id, 80, 10);
+        assert!(
+            mermaid::inline_image_is_materialized(id),
+            "prefetch must not disturb already-materialized state"
+        );
     }
 
     #[test]

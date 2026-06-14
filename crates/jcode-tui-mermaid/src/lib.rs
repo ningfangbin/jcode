@@ -430,7 +430,11 @@ static SVG_FONT_DB: LazyLock<Arc<usvg::fontdb::Database>> = LazyLock::new(|| {
 /// several MB of RAM (e.g. a 1440×1080 RGBA image ≈ 6 MB, plus protocol
 /// encoding overhead).  Keeping this bounded prevents unbounded memory
 /// growth over long sessions with many diagrams.
-const IMAGE_STATE_MAX: usize = 12;
+///
+/// Sized to comfortably cover the viewport plus the look-ahead prefetch band
+/// (see `ui_inline_image::prefetch`) so scrolling back through a transcript of
+/// inline screenshots reuses warm protocol state instead of re-encoding.
+const IMAGE_STATE_MAX: usize = 24;
 
 /// Image state cache - holds StatefulProtocol for each rendered image
 /// Keyed by content hash; source_path guards prevent stale reuse when
@@ -556,8 +560,12 @@ enum ResizeMode {
     Viewport,
 }
 
-/// Cache decoded source images for fast viewport cropping
-const SOURCE_CACHE_MAX: usize = 8;
+/// Cache decoded source images for fast viewport cropping.
+///
+/// Sized to cover the viewport plus the inline-image look-ahead prefetch band
+/// so scrolling back over recently seen screenshots reuses the decoded pixels
+/// instead of re-opening and re-decoding the cached PNG from disk.
+const SOURCE_CACHE_MAX: usize = 16;
 
 struct SourceImageEntry {
     path: PathBuf,
