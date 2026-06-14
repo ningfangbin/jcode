@@ -58,6 +58,9 @@ struct CorpusMemory {
     graph: String,
     source: Option<String>,
     active: bool,
+    confidence: f32,
+    strength: u32,
+    age_days: f32,
 }
 
 struct Corpus {
@@ -73,6 +76,7 @@ impl Corpus {
             .and_then(|s| s.to_str())
             .unwrap_or("unknown")
             .to_string();
+        let now = chrono::Utc::now();
         let memories = graph
             .memories
             .values()
@@ -84,6 +88,9 @@ impl Corpus {
                 graph: graph_name.clone(),
                 source: m.source.clone(),
                 active: m.active,
+                confidence: m.confidence,
+                strength: m.strength,
+                age_days: (now - m.updated_at).num_seconds().max(0) as f32 / 86_400.0,
             })
             .collect();
         Ok(Corpus { memories })
@@ -225,6 +232,15 @@ fn tokenize(s: &str) -> Vec<String> {
         .filter(|t| !t.is_empty())
         .map(|t| t.to_lowercase())
         .collect()
+}
+
+/// Gentle importance prior from confidence/strength/recency. Multiplicative
+/// tiebreaker on the fused relevance score; never dominates relevance.
+fn memory_prior(m: &CorpusMemory) -> f32 {
+    let conf = 0.9 + 0.2 * m.confidence.clamp(0.0, 1.0);
+    let strength = 1.0 + 0.05 * (m.strength as f32 + 1.0).ln().min(3.0);
+    let recency = 1.0 + 0.1 * (-(m.age_days.max(0.0)) / 120.0).exp();
+    conf * strength * recency
 }
 
 /// Reciprocal Rank Fusion of multiple ranked lists.
@@ -659,6 +675,27 @@ fn cmd_metrics(args: &[String]) -> Result<()> {
                 let dense = dense_retrieve(&q_emb, &corpus, 0.0, 50, false);
                 let lex = bm25.search(&q.query, 50);
                 rrf(&[dense, lex], 60.0, EMBEDDING_MAX_HITS).into_iter().map(|(id, _)| id).collect()
+            }
+            "hybrid_priors" => {
+                let dense = dense_retrieve(&q_emb, &corpus, 0.0, 50, false);
+                let lex = bm25.search(&q.query, 50);
+                let fused = rrf(&[dense, lex], 60.0, 50);
+                // Multiply fused RRF score by a gentle prior derived from
+                // confidence / strength / recency. Priors only re-order within
+                // the already-retrieved set; they never add/remove candidates.
+                let prior: HashMap<&String, f32> = corpus
+                    .active()
+                    .map(|m| (&m.id, memory_prior(m)))
+                    .collect();
+                let mut adj: Vec<(String, f32)> = fused
+                    .into_iter()
+                    .map(|(id, s)| {
+                        let p = prior.get(&id).copied().unwrap_or(1.0);
+                        (id, s * p)
+                    })
+                    .collect();
+                adj.sort_by(|a, b| b.1.total_cmp(&a.1));
+                adj.into_iter().take(EMBEDDING_MAX_HITS).map(|(id, _)| id).collect()
             }
             other => anyhow::bail!("unknown config: {other}"),
         };
