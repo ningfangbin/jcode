@@ -1430,6 +1430,17 @@ fn cmd_gate(args: &[String]) -> Result<()> {
     let cadence: usize = opts.get("cadence").and_then(|s| s.parse().ok()).unwrap_or(0);
     let mut nov_fires = 0usize;
     let mut nov_total = 0usize;
+    // Production-faithful gate: mirrors memory_agent::should_run_rerank exactly.
+    // Fires when first-turn OR topic_changed (cosine < TOPIC_CHANGE_THRESHOLD vs
+    // last embedding) OR turns_since_last_rerank >= prod_cadence. This captures
+    // the real fire-rate (above 1/N because topic jumps + first turn fire extra).
+    let prod_cadence: usize =
+        opts.get("prod_cadence").and_then(|s| s.parse().ok()).unwrap_or(3);
+    const TOPIC_CHANGE_THRESHOLD: f32 = 0.3;
+    let mut prod_fires = 0usize;
+    let mut prod_total = 0usize;
+    let mut prod_topic_fires = 0usize;
+    let mut prod_cadence_fires = 0usize;
 
     let mut sessions: Vec<(PathBuf, std::time::SystemTime)> = std::fs::read_dir(&sessions_dir)?
         .filter_map(|e| e.ok())
@@ -1514,6 +1525,46 @@ fn cmd_gate(args: &[String]) -> Result<()> {
         for w in embs.windows(2) {
             if !w[0].is_empty() && !w[1].is_empty() {
                 consec_sims.push(embedding::cosine_similarity(&w[0], &w[1]));
+            }
+        }
+
+        // Production-faithful gate sim: mirror should_run_rerank over the turn
+        // sequence. turn_count increments each turn; topic_changed compares to
+        // the PREVIOUS turn's embedding (matches prod's last_context_embedding,
+        // which is updated every turn before the gate).
+        {
+            let mut last_rerank_turn: Option<usize> = None;
+            let mut prev_emb: Option<&Vec<f32>> = None;
+            for (turn_count, emb) in embs.iter().enumerate() {
+                if emb.is_empty() {
+                    continue;
+                }
+                let topic_changed = match prev_emb {
+                    Some(p) => embedding::cosine_similarity(emb, p) < TOPIC_CHANGE_THRESHOLD,
+                    None => false,
+                };
+                prod_total += 1;
+                let fire = if topic_changed {
+                    prod_topic_fires += 1;
+                    true
+                } else {
+                    match last_rerank_turn {
+                        None => true,
+                        Some(last) => {
+                            let due = prod_cadence <= 1
+                                || turn_count.saturating_sub(last) >= prod_cadence;
+                            if due {
+                                prod_cadence_fires += 1;
+                            }
+                            due
+                        }
+                    }
+                };
+                if fire {
+                    prod_fires += 1;
+                    last_rerank_turn = Some(turn_count);
+                }
+                prev_emb = Some(emb);
             }
         }
 
@@ -1648,6 +1699,19 @@ fn cmd_gate(args: &[String]) -> Result<()> {
              fire_rate {:.1}%  {nov_fires}/{nov_total}  {:.2}x fewer calls",
             nrate * 100.0,
             if nrate > 0.0 { 1.0 / nrate } else { 0.0 }
+        );
+    }
+
+    // Production-faithful gate result (always printed; needs no corpus).
+    if prod_total > 0 {
+        let rate = prod_fires as f32 / prod_total as f32;
+        println!(
+            "\nPRODUCTION gate (should_run_rerank, cadence={prod_cadence}, topic-override @cos<{:.1}):\n  \
+             fire_rate {:.1}%  {prod_fires}/{prod_total}  {:.2}x fewer calls\n  \
+             breakdown: {prod_topic_fires} topic-override fires + {prod_cadence_fires} cadence-due fires (+ first-turn)",
+            TOPIC_CHANGE_THRESHOLD,
+            rate * 100.0,
+            if rate > 0.0 { 1.0 / rate } else { 0.0 },
         );
     }
     Ok(())
