@@ -1,0 +1,2 @@
+llm_rerank: reranking 28 queries (pool=50) with claude-sonnet-4-6 backend=claude (concurrency 10)
+llm_judge: 28 LLM calls | avg prompt ~2499 tok, avg output ~0 tok (1 call/turn)

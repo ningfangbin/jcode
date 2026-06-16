@@ -1,0 +1,2 @@
+llm_scored: scoring 28 queries (pool=50) with claude-sonnet-4-6 (concurrency 10)
+llm_scored: 28 LLM calls | avg prompt ~2455 tok, avg output ~88 tok (1 call/turn)

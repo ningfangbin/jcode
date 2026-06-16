@@ -35,6 +35,12 @@ const MIN_KEEP: usize = 1;
 // Memory agent context window (memory_prompt.rs constants are private; the
 // production path calls format_context_for_relevance over the full message list).
 
+// Cost accounting for LLM configs, written by the rerank precompute and read
+// when emitting the result JSON. 0 for no-LLM configs.
+static LLM_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static LLM_PROMPT_TOK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static LLM_OUTPUT_TOK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 fn bench_root() -> PathBuf {
     std::env::var("MEMORY_BENCH_DIR")
         .map(PathBuf::from)
@@ -675,6 +681,30 @@ fn parse_judge_response(resp: &str, n: usize) -> Vec<usize> {
 // (bench == prod). This file only orchestrates running it over the gold set.
 use jcode::memory_rerank::{LLM_RERANK_SYSTEM, build_rerank_prompt, parse_rerank_response};
 
+/// STRICT precision variant of the listwise rerank system prompt. Pushes the
+/// model to keep ONLY memories it is near-certain are useful for THIS request,
+/// and to prefer an empty result over any marginal/keyword-only match. This is
+/// the precision lever: the default prompt keeps "clearly useful" items, this one
+/// keeps "you would bet the memory is needed to answer well".
+const LLM_RERANK_STRICT_SYSTEM: &str = "You decide which stored MEMORIES to surface to an AI coding agent for the CURRENT request. \
+Apply a STRICT relevance bar: keep a memory ONLY if a competent engineer, seeing the current request, would clearly want that specific fact/preference/correction/procedure to answer well. \
+When in doubt, DROP it. Reject generic, off-topic, stale, or merely keyword-overlapping memories. \
+Most requests need 0-2 memories; returning an empty list is correct and expected when nothing clearly applies. \
+Never pad to a fixed count. \
+Reply with ONLY a JSON array of the kept candidate numbers, best first, e.g. [3,1] (or [] if none qualify). No prose.";
+
+/// Confidence-SCORED rerank: the model assigns each candidate a 0-100 usefulness
+/// score for the current request. We cache the full score map, then a cheap
+/// threshold sweep picks the dynamic injected set (count varies per query,
+/// including 0). Scoring (vs binary keep/drop) gives a calibrated knob to push
+/// precision toward 1.0 by raising the threshold, with recall/cost reported.
+const LLM_SCORED_SYSTEM: &str = "You score how useful each stored MEMORY would be to surface to an AI coding agent for the CURRENT request. \
+For each candidate, output an integer 0-100: 100 = clearly essential to answer this request well (a directly-applicable fact/preference/correction/procedure); \
+0 = irrelevant, generic, stale, or only shares surface keywords. Use the full range and be calibrated: most candidates in a pool are NOT relevant and should score low. \
+Reply with ONLY a JSON object mapping candidate number to score, e.g. {\"1\":5,\"2\":95,\"3\":0}. Include EVERY candidate. No prose.";
+
+
+
 // ---- Synthesis ("fork writes what to inject") experiment -----------------
 //
 // Instead of selecting relevant memories (llm_rerank), the model reads the
@@ -735,6 +765,30 @@ fn parse_synth_response(resp: &str, n: usize) -> (Vec<usize>, String) {
         })
         .unwrap_or_default();
     (used, note)
+}
+
+/// Parse a `{"1":95,"2":0,...}` score map into `(candidate_index, score)` pairs
+/// (0-based index). Tolerates surrounding prose and missing candidates.
+fn parse_scored_response(resp: &str, n: usize) -> Vec<(usize, f32)> {
+    let (Some(s), Some(e)) = (resp.find('{'), resp.rfind('}')) else {
+        return Vec::new();
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&resp[s..=e]) else {
+        return Vec::new();
+    };
+    let Some(obj) = v.as_object() else { return Vec::new() };
+    let mut out = Vec::new();
+    for (k, val) in obj {
+        let Ok(idx1) = k.trim().parse::<usize>() else { continue };
+        if idx1 < 1 || idx1 > n {
+            continue;
+        }
+        let score = val.as_f64().or_else(|| val.as_str().and_then(|s| s.parse().ok()));
+        if let Some(sc) = score {
+            out.push((idx1 - 1, sc as f32));
+        }
+    }
+    out
 }
 
 fn cmd_judge(args: &[String]) -> Result<()> {
@@ -958,6 +1012,8 @@ fn cmd_metrics(args: &[String]) -> Result<()> {
     // plumbing (Claude / OpenAI OAuth) + focused query.
     let llm_rerank_map: HashMap<String, Vec<String>> = if config == "llm_rerank"
         || config == "llm_rerank_padded"
+        || config == "llm_strict"
+        || config == "llm_judge"
         || config == "llm_synth"
     {
         // `llm_rerank` = precision mode (inject only model-kept ids).
@@ -970,6 +1026,8 @@ fn cmd_metrics(args: &[String]) -> Result<()> {
         //   review.
         let padded = config == "llm_rerank_padded";
         let synth = config == "llm_synth";
+        let strict = config == "llm_strict";
+        let judge_sel = config == "llm_judge";
         let model = opts
             .get("model")
             .cloned()
@@ -1054,6 +1112,14 @@ fn cmd_metrics(args: &[String]) -> Result<()> {
                         // Prompt + system for cost accounting (char proxy for tokens).
                         let (system, prompt) = if synth {
                             (LLM_SYNTH_SYSTEM, build_synth_prompt(&query, &cands))
+                        } else if strict {
+                            (LLM_RERANK_STRICT_SYSTEM, build_rerank_prompt(&query, &cands))
+                        } else if judge_sel {
+                            // Use the EXACT gold-judge prompt as the selector: the
+                            // gold labels were produced by this judge, so this is
+                            // the precision ceiling for an LLM selector (it agrees
+                            // with the labeler by construction up to sampling noise).
+                            (JUDGE_SYSTEM, build_rerank_prompt(&query, &cands))
                         } else {
                             (LLM_RERANK_SYSTEM, build_rerank_prompt(&query, &cands))
                         };
@@ -1138,7 +1204,222 @@ fn cmd_metrics(args: &[String]) -> Result<()> {
             );
         }
 
+        // Cost accounting (1 LLM call per judged query). Char proxy / 4 ~= tokens.
+        {
+            let nq = raw.len().max(1);
+            let total_prompt: usize = raw.iter().map(|(_, _, _, p, _)| *p).sum();
+            let total_out: usize = raw.iter().map(|(_, _, n, _, _)| n.len()).sum();
+            eprintln!(
+                "{config}: {} LLM calls | avg prompt ~{} tok, avg output ~{} tok (1 call/turn)",
+                raw.len(),
+                total_prompt / nq / 4,
+                total_out / nq / 4,
+            );
+            LLM_CALLS.store(raw.len(), std::sync::atomic::Ordering::Relaxed);
+            LLM_PROMPT_TOK.store(total_prompt / nq / 4, std::sync::atomic::Ordering::Relaxed);
+            LLM_OUTPUT_TOK.store(total_out / nq / 4, std::sync::atomic::Ordering::Relaxed);
+        }
+
         raw.into_iter().map(|(qid, ids, _, _, _)| (qid, ids)).collect()
+    } else if config == "llm_cached" {
+        // Replay a previously-saved llm_rerank map (results/llm_rerank_map.json)
+        // so cap/gate sweeps are free (no LLM calls). Written by any llm_* run.
+        let path = bench_root().join("results/llm_rerank_map.json");
+        let txt = std::fs::read_to_string(&path)
+            .with_context(|| format!("no cached map at {} (run an llm_* config first)", path.display()))?;
+        serde_json::from_str(&txt)?
+    } else {
+        HashMap::new()
+    };
+    // Persist the freshly-computed map for cheap replay via config=llm_cached.
+    if !llm_rerank_map.is_empty() && config != "llm_cached" {
+        let path = bench_root().join("results/llm_rerank_map.json");
+        let _ = std::fs::create_dir_all(path.parent().unwrap());
+        let _ = std::fs::write(&path, serde_json::to_string(&llm_rerank_map)?);
+    }
+
+    // ---- Confidence-scored rerank (llm_scored / llm_scored_cached) ----
+    // `llm_scored` asks the model for a 0-100 usefulness score per candidate and
+    // caches the full score map. `llm_scored_cached` replays that cache so a
+    // --score_threshold sweep is free. Selection at scoring time: keep candidates
+    // with score >= score_threshold (dynamic count incl. 0), capped at gate_max.
+    let score_threshold: f32 = opts.get("score_threshold").and_then(|s| s.parse().ok()).unwrap_or(80.0);
+    let llm_score_map: HashMap<String, Vec<(String, f32)>> = if config == "llm_scored" {
+        let model = opts.get("model").cloned().unwrap_or_else(|| "claude-sonnet-4-6".to_string());
+        let backend = opts.get("backend").cloned().unwrap_or_else(|| {
+            if model.starts_with("gpt") || model.starts_with("o1") || model.starts_with("o3") {
+                "openai".into()
+            } else {
+                "claude".into()
+            }
+        });
+        let concurrency: usize = opts.get("concurrency").and_then(|s| s.parse().ok()).unwrap_or(8);
+        let mut jobs: Vec<(String, String, Vec<(String, String)>)> = Vec::new();
+        for q in &queries {
+            let Some(rel) = gold.get(&q.qid) else { continue };
+            if rel.is_empty() {
+                continue;
+            }
+            let q_emb = embedding::embed(&q.query)?;
+            let dense = dense_retrieve(&q_emb, &corpus, 0.0, rerank_pool, false);
+            let lex = bm25.search(&q.query, rerank_pool);
+            let pool = rrf(&[dense, lex], 60.0, rerank_pool);
+            let cands: Vec<(String, String)> = pool
+                .into_iter()
+                .map(|(id, _)| (id.clone(), content_by_id.get(&id).cloned().unwrap_or_default()))
+                .collect();
+            jobs.push((q.qid.clone(), focus_query(&q.query), cands));
+        }
+        eprintln!("llm_scored: scoring {} queries (pool={}) with {} (concurrency {})", jobs.len(), rerank_pool, model, concurrency);
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+        let raw: Vec<(String, Vec<(String, f32)>, usize, usize)> = rt.block_on(async {
+            use futures::stream::{self, StreamExt};
+            stream::iter(jobs.into_iter())
+                .map(|(qid, query, cands)| {
+                    let model = model.clone();
+                    let backend = backend.clone();
+                    async move {
+                        let sidecar = if backend == "openai" {
+                            jcode::sidecar::Sidecar::with_openai_model(&model, None)
+                        } else {
+                            jcode::sidecar::Sidecar::with_claude_model(&model)
+                        };
+                        let n = cands.len();
+                        let prompt = build_rerank_prompt(&query, &cands);
+                        let prompt_chars = LLM_SCORED_SYSTEM.len() + prompt.len();
+                        let mut scored: Vec<(String, f32)> = Vec::new();
+                        let mut out_chars = 0usize;
+                        for attempt in 0..2 {
+                            match sidecar.complete(LLM_SCORED_SYSTEM, &prompt).await {
+                                Ok(resp) => {
+                                    out_chars = resp.len();
+                                    scored = parse_scored_response(&resp, n)
+                                        .into_iter()
+                                        .map(|(i, s)| (cands[i].0.clone(), s))
+                                        .collect();
+                                    break;
+                                }
+                                Err(e) => {
+                                    if attempt == 1 {
+                                        eprintln!("llm_scored failed for {qid}: {e}");
+                                    } else {
+                                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                                    }
+                                }
+                            }
+                        }
+                        (qid, scored, prompt_chars, out_chars)
+                    }
+                })
+                .buffer_unordered(concurrency)
+                .collect::<Vec<_>>()
+                .await
+        });
+        let nq = raw.len().max(1);
+        let tp: usize = raw.iter().map(|(_, _, p, _)| *p).sum();
+        let to: usize = raw.iter().map(|(_, _, _, o)| *o).sum();
+        eprintln!("llm_scored: {} LLM calls | avg prompt ~{} tok, avg output ~{} tok (1 call/turn)", raw.len(), tp / nq / 4, to / nq / 4);
+        LLM_CALLS.store(raw.len(), std::sync::atomic::Ordering::Relaxed);
+        LLM_PROMPT_TOK.store(tp / nq / 4, std::sync::atomic::Ordering::Relaxed);
+        LLM_OUTPUT_TOK.store(to / nq / 4, std::sync::atomic::Ordering::Relaxed);
+        let map: HashMap<String, Vec<(String, f32)>> = raw.into_iter().map(|(q, s, _, _)| (q, s)).collect();
+        let path = bench_root().join("results/llm_score_map.json");
+        let _ = std::fs::write(&path, serde_json::to_string(&map)?);
+        map
+    } else if config == "llm_scored_cached" {
+        let path = bench_root().join("results/llm_score_map.json");
+        let txt = std::fs::read_to_string(&path)
+            .with_context(|| format!("no cached score map at {} (run llm_scored first)", path.display()))?;
+        // Cached llm_scored runs ran the LLM, so report 1 call/turn for cost.
+        LLM_CALLS.store(1, std::sync::atomic::Ordering::Relaxed);
+        serde_json::from_str(&txt)?
+    } else if config == "llm_ensemble" {
+        // ENSEMBLE voting: run the gold-judge selector `--ensemble=N` times per
+        // query (independent samples) and record each candidate's vote count
+        // (0..N) as its score. Keeping only high-vote candidates removes single-
+        // judge noise -> higher precision. Cached to llm_score_map.json, so
+        // `llm_scored_cached --score_threshold=K` sweeps the vote bar K for free.
+        let n_ens: usize = opts.get("ensemble").and_then(|s| s.parse().ok()).unwrap_or(3);
+        let model = opts.get("model").cloned().unwrap_or_else(|| "claude-sonnet-4-6".to_string());
+        let concurrency: usize = opts.get("concurrency").and_then(|s| s.parse().ok()).unwrap_or(8);
+        let qv = opts.get("query_view").cloned().unwrap_or_else(|| "focused".into());
+        let all_queries = opts.get("all_queries").map(|s| s == "1" || s == "true").unwrap_or(false);
+        let mut jobs: Vec<(String, String, Vec<(String, String)>)> = Vec::new();
+        for q in &queries {
+            match gold.get(&q.qid) {
+                Some(rel) if !rel.is_empty() => {}
+                // Empty-gold (should inject nothing): include only with --all_queries,
+                // so we can measure the LLM's clean-rate on no-memory-needed turns.
+                _ if all_queries => {}
+                _ => continue,
+            }
+            let q_emb = embedding::embed(&q.query)?;
+            let dense = dense_retrieve(&q_emb, &corpus, 0.0, rerank_pool, false);
+            let lex = bm25.search(&q.query, rerank_pool);
+            let pool = rrf(&[dense, lex], 60.0, rerank_pool);
+            let cands: Vec<(String, String)> = pool
+                .into_iter()
+                .map(|(id, _)| (id.clone(), content_by_id.get(&id).cloned().unwrap_or_default()))
+                .collect();
+            let rq = if qv == "full" { q.query.clone() } else { focus_query(&q.query) };
+            jobs.push((q.qid.clone(), rq, cands));
+        }
+        eprintln!("llm_ensemble: {} queries x {} votes (pool={}) with {} (concurrency {})", jobs.len(), n_ens, rerank_pool, model, concurrency);
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+        let raw: Vec<(String, Vec<(String, f32)>, usize, usize)> = rt.block_on(async {
+            use futures::stream::{self, StreamExt};
+            stream::iter(jobs.into_iter())
+                .map(|(qid, query, cands)| {
+                    let model = model.clone();
+                    async move {
+                        let n = cands.len();
+                        let prompt = build_rerank_prompt(&query, &cands);
+                        let prompt_chars = (JUDGE_SYSTEM.len() + prompt.len()) * n_ens;
+                        let mut votes: HashMap<usize, usize> = HashMap::new();
+                        let mut out_chars = 0usize;
+                        for _ in 0..n_ens {
+                            let sidecar = jcode::sidecar::Sidecar::with_claude_model(&model);
+                            for attempt in 0..2 {
+                                match sidecar.complete(JUDGE_SYSTEM, &prompt).await {
+                                    Ok(resp) => {
+                                        out_chars += resp.len();
+                                        for i in parse_rerank_response(&resp, n) {
+                                            *votes.entry(i).or_insert(0) += 1;
+                                        }
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        if attempt == 1 {
+                                            eprintln!("llm_ensemble failed for {qid}: {e}");
+                                        } else {
+                                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        let scored: Vec<(String, f32)> = votes
+                            .into_iter()
+                            .map(|(i, v)| (cands[i].0.clone(), v as f32))
+                            .collect();
+                        (qid, scored, prompt_chars, out_chars)
+                    }
+                })
+                .buffer_unordered(concurrency)
+                .collect::<Vec<_>>()
+                .await
+        });
+        let nq = raw.len().max(1);
+        let tp: usize = raw.iter().map(|(_, _, p, _)| *p).sum();
+        let to: usize = raw.iter().map(|(_, _, _, o)| *o).sum();
+        eprintln!("llm_ensemble: {} queries | {} calls/turn | avg prompt ~{} tok, avg output ~{} tok", raw.len(), n_ens, tp / nq / 4, to / nq / 4);
+        LLM_CALLS.store(n_ens, std::sync::atomic::Ordering::Relaxed);
+        LLM_PROMPT_TOK.store(tp / nq / 4, std::sync::atomic::Ordering::Relaxed);
+        LLM_OUTPUT_TOK.store(to / nq / 4, std::sync::atomic::Ordering::Relaxed);
+        let map: HashMap<String, Vec<(String, f32)>> = raw.into_iter().map(|(q, s, _, _)| (q, s)).collect();
+        let path = bench_root().join("results/llm_score_map.json");
+        let _ = std::fs::write(&path, serde_json::to_string(&map)?);
+        map
     } else {
         HashMap::new()
     };
@@ -1151,6 +1432,57 @@ fn cmd_metrics(args: &[String]) -> Result<()> {
     let mut ndcg = 0.0;
     let mut judged = 0usize;
     let mut total_injected = 0usize;
+    // Full-set "bloat" accounting over EMPTY-gold queries (the ones that should
+    // inject NOTHING, e.g. a UI task that needs no memory). These dominate real
+    // usage (122/150 here) and are where context bloat actually happens, but the
+    // recall/precision@k loop below skips them. We measure them only for configs
+    // whose selection is query-adaptive (can return 0): the no-LLM dynamic gate
+    // and the LLM selectors. Fixed top-k always injects k here by construction.
+    let empty_aware = matches!(
+        config.as_str(),
+        "hybrid_dyn" | "oracle_dyn" | "llm_rerank" | "llm_strict" | "llm_judge"
+            | "llm_scored" | "llm_scored_cached" | "llm_ensemble"
+    );
+    let mut empty_q = 0usize;
+    let mut empty_clean = 0usize; // empty-gold queries where we injected 0 (good)
+    let mut empty_injected = 0usize; // total wrongly-injected memories on empty-gold
+    if empty_aware {
+        for q in &queries {
+            let is_empty = gold.get(&q.qid).map(|r| r.is_empty()).unwrap_or(true);
+            if !is_empty {
+                continue;
+            }
+            empty_q += 1;
+            let q_emb = embedding::embed(&q.query)?;
+            let origin: HashSet<&String> = q.origin_memory_ids.iter().collect();
+            let injected: Vec<String> = match config.as_str() {
+                "hybrid_dyn" => {
+                    let dense = dense_retrieve(&q_emb, &corpus, 0.0, 50, false);
+                    let lex = bm25.search(&q.query, 50);
+                    let pool = rrf(&[dense, lex], 60.0, 50);
+                    dynamic_gate(&pool, gate_floor, gate_drop, gate_max)
+                }
+                "oracle_dyn" => Vec::new(), // gold is empty -> oracle injects nothing
+                "llm_scored" | "llm_scored_cached" | "llm_ensemble" => {
+                    let mut scored = llm_score_map.get(&q.qid).cloned().unwrap_or_default();
+                    scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+                    scored.into_iter().filter(|(_, s)| *s >= score_threshold).take(gate_max).map(|(id, _)| id).collect()
+                }
+                // LLM keep/drop selectors: not precomputed for empty-gold queries
+                // (the rerank map only covers judged queries), so skip scoring them
+                // here rather than fire extra LLM calls.
+                _ => {
+                    empty_q -= 1;
+                    continue;
+                }
+            };
+            let injected: Vec<String> = injected.into_iter().filter(|id| !origin.contains(id)).collect();
+            if injected.is_empty() {
+                empty_clean += 1;
+            }
+            empty_injected += injected.len();
+        }
+    }
 
     for q in &queries {
         let Some(rel) = gold.get(&q.qid) else { continue };
@@ -1276,7 +1608,7 @@ fn cmd_metrics(args: &[String]) -> Result<()> {
                 let pool = rrf(&[dense, lex], 60.0, 50);
                 dynamic_gate(&pool, gate_floor, gate_drop, gate_max)
             }
-            "llm_rerank" | "llm_rerank_padded" | "llm_synth" => {
+            "llm_rerank" | "llm_rerank_padded" | "llm_strict" | "llm_judge" | "llm_synth" | "llm_cached" => {
                 // recall-5 Mode-2: listwise LLM rerank of the hybrid top-N pool,
                 // precomputed into llm_rerank_map above. `llm_rerank` is precision
                 // mode (relevant-only); `llm_rerank_padded` emulates the old buggy
@@ -1286,7 +1618,20 @@ fn cmd_metrics(args: &[String]) -> Result<()> {
                     .cloned()
                     .unwrap_or_default()
                     .into_iter()
-                    .take(EMBEDDING_MAX_HITS)
+                    .take(gate_max.min(EMBEDDING_MAX_HITS))
+                    .collect()
+            }
+            "llm_scored" | "llm_scored_cached" | "llm_ensemble" => {
+                // Threshold the cached per-candidate scores: keep score >=
+                // score_threshold, best-first, capped at gate_max. Dynamic count
+                // (incl. 0). Raising --score_threshold trades recall for precision.
+                let mut scored = llm_score_map.get(&q.qid).cloned().unwrap_or_default();
+                scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+                scored
+                    .into_iter()
+                    .filter(|(_, s)| *s >= score_threshold)
+                    .take(gate_max)
+                    .map(|(id, _)| id)
                     .collect()
             }
             "hybrid_priors" => {
@@ -1390,6 +1735,14 @@ fn cmd_metrics(args: &[String]) -> Result<()> {
         "mrr": mrr / n,
         "ndcg@10": ndcg / n,
         "avg_injected": total_injected as f32 / n,
+        "llm_calls_per_turn": if LLM_CALLS.load(std::sync::atomic::Ordering::Relaxed) > 0 { 1 } else { 0 },
+        "llm_prompt_tok": LLM_PROMPT_TOK.load(std::sync::atomic::Ordering::Relaxed),
+        "llm_output_tok": LLM_OUTPUT_TOK.load(std::sync::atomic::Ordering::Relaxed),
+        // Bloat metrics on EMPTY-gold queries (should inject 0). Only meaningful
+        // for query-adaptive configs; 0 counts when not measured.
+        "empty_gold_queries": empty_q,
+        "empty_gold_clean_rate": if empty_q > 0 { empty_clean as f32 / empty_q as f32 } else { 0.0 },
+        "empty_gold_avg_injected": if empty_q > 0 { empty_injected as f32 / empty_q as f32 } else { 0.0 },
     });
     let out_path = bench_root().join(format!("results/{}.json", config));
     std::fs::create_dir_all(out_path.parent().unwrap())?;
