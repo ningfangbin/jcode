@@ -249,8 +249,10 @@ try? handler.perform([req])
             "Recognized text in {size} px image (bbox normalized 0..1, origin bottom-left; \
              multiply by image size):"
         ),
-        None => "Recognized text (bbox normalized 0..1, origin bottom-left; multiply by image size):"
-            .to_string(),
+        None => {
+            "Recognized text (bbox normalized 0..1, origin bottom-left; multiply by image size):"
+                .to_string()
+        }
     };
     let mut lines = vec![header];
     for line in raw.lines() {

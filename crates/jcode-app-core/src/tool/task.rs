@@ -223,7 +223,8 @@ impl Tool for SubagentTool {
         let run_result = if timeout_secs == 0 {
             run_fut.await
         } else {
-            match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), run_fut).await {
+            match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), run_fut).await
+            {
                 Ok(result) => result,
                 Err(_) => {
                     logging::warn(&format!(

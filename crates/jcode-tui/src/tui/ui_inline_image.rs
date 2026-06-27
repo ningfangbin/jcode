@@ -657,12 +657,9 @@ pub(crate) fn build_section(
                 ImageExpandLevel::Fit => {
                     fit_geometry(item.width, item.height, width, viewport_height)
                 }
-                _ => fit_geometry_with_cap(
-                    item.width,
-                    item.height,
-                    width,
-                    level.anchored_cap_rows(),
-                ),
+                _ => {
+                    fit_geometry_with_cap(item.width, item.height, width, level.anchored_cap_rows())
+                }
             };
             let region_start = lines.len();
             for _ in 0..rows {
@@ -935,7 +932,10 @@ mod tests {
         let line = image_label_line(&item(600, 400), false, ImageExpandLevel::Fit);
         let text = jcode_tui_render::line_plain_text(&line);
         assert!(text.contains("show image"), "show badge missing: {text:?}");
-        assert!(!text.contains("expand"), "hidden image must hide expand badge: {text:?}");
+        assert!(
+            !text.contains("expand"),
+            "hidden image must hide expand badge: {text:?}"
+        );
     }
 
     #[test]
