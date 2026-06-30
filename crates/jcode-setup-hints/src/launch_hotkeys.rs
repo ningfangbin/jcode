@@ -17,16 +17,43 @@
 //! what we can assert in tests, and the listener stays a thin dispatcher.
 
 use jcode_config_types::{LaunchHotkeyEntry, LaunchHotkeysConfig};
+#[cfg(any(test, target_os = "macos"))]
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::keymap::KeyChord;
-use crate::macos_terminal::{escape_shell_single_quotes, paused_jcode_shell_command_with_args};
+
+/// POSIX single-quote escaping (turns `'` into `'\''`). Local copy so this
+/// module compiles on every platform without pulling in the macOS-only
+/// `macos_terminal` module.
+fn escape_shell_single_quotes(input: &str) -> String {
+    input.replace('\'', r#"'\''"#)
+}
+
+/// Build a jcode launch snippet that pauses on non-zero exit so the user can
+/// read the error before the terminal closes. Mirrors the macOS launcher's
+/// behavior; kept local so the resolver is platform-independent.
+#[cfg(any(test, target_os = "macos"))]
+fn paused_jcode_shell_command_with_args(exe_path: &str, args: &[String]) -> String {
+    let escaped_exe = escape_shell_single_quotes(exe_path);
+    let mut arg_str = String::new();
+    for arg in args {
+        arg_str.push_str(" '");
+        arg_str.push_str(&escape_shell_single_quotes(arg));
+        arg_str.push('\'');
+    }
+    format!(
+        r#"if [ ! -x '{exe}' ]; then printf 'jcode executable not found.\n'; exit 127; fi; '{exe}'{args}; status=$?; if [ "$status" -ne 0 ]; then printf '\nJcode exited with status %s.\n' "$status"; printf 'Press Enter to close... '; read -r _; fi; exit "$status""#,
+        exe = escaped_exe,
+        args = arg_str,
+    )
+}
 
 /// One entry in the listener's `plan.json`: the chord to register and the script
 /// to run when it fires. Written by the installer, read by the launchd listener,
 /// so the listener stays a thin dispatcher that never re-parses config.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg(any(test, target_os = "macos"))]
 pub(crate) struct PlanEntry {
     pub chord: String,
     pub script: String,
@@ -210,6 +237,7 @@ fn read_existing_dir(file: &str) -> Option<PathBuf> {
 
 /// Build the full shell command (run inside the freshly opened terminal) for a
 /// resolved hotkey.
+#[cfg(any(test, target_os = "macos"))]
 pub(crate) fn shell_command_for(entry: &ResolvedLaunchHotkey, exe_path: &str) -> String {
     format!(
         "{}{}",
