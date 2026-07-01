@@ -73,6 +73,7 @@ def score_cell(ctx: Context, scorers) -> dict:
     return {
         "device": ctx.device,
         "scenario": ctx.scenario,
+        "content_size": ctx.meta.get("content_size", "large"),
         "shot": ctx.screenshot,
         "reward": round(cell_reward, 2),
         "categories": [asdict(c) for c in cats],
@@ -112,6 +113,7 @@ def aggregate(cells: list[dict]) -> dict:
         "by_category": cat_means,
         "worst_cell": {"device": worst_cell["device"],
                        "scenario": worst_cell["scenario"],
+                       "content_size": worst_cell.get("content_size", "large"),
                        "reward": worst_cell["reward"]},
         "worst_category": ({"name": worst_cat[0], **worst_cat[1]} if worst_cat else None),
     }
@@ -128,13 +130,17 @@ def render(report: dict) -> str:
         out.append(f"    [{d['category']}] {name:20} {d['mean']:5.1f}  (w={d['weight']:.2f})")
     out.append("")
     out.append("  per cell:")
-    out.append(f"    {'device':14} {'scenario':9} {'reward':>6}")
+    out.append(f"    {'device':22} {'size':14} {'scenario':9} {'reward':>6}")
     for c in report["cells"]:
-        out.append(f"    {c['device'][:14]:14} {c['scenario']:9} {c['reward']:6.1f}")
+        size = c.get("content_size", "large").replace("accessibility", "a11y")
+        out.append(f"    {c['device'][:22]:22} {size[:14]:14} "
+                   f"{c['scenario']:9} {c['reward']:6.1f}")
     out.append("-" * 52)
     if report.get("worst_cell"):
         w = report["worst_cell"]
-        out.append(f"  worst cell:     {w['reward']:.1f}  ({w['device']} / {w['scenario']})")
+        out.append(f"  worst cell:     {w['reward']:.1f}  "
+                   f"({w['device']} / {w.get('content_size', 'large')} / "
+                   f"{w['scenario']})")
     if report.get("worst_category"):
         w = report["worst_category"]
         out.append(f"  worst category: {w['mean']:.1f}  ({w['name']})")
@@ -145,12 +151,20 @@ def build_cells_from_matrix(matrix_json: str, source_root: str) -> list[Context]
     data = json.loads(Path(matrix_json).read_text())
     ctxs = []
     for row in data:
+        runtime = row.get("runtime")
+        if not isinstance(runtime, dict) or not runtime:
+            runtime = None
+        meta = {}
+        if row.get("content_size"):
+            meta["content_size"] = row["content_size"]
         ctxs.append(Context(
             screenshot=row.get("shot"),
             device=row.get("device", "iPhone 17"),
             scenario=row.get("scenario", "short"),
-            scale=3,
+            scale=int(row.get("scale", 3)),
             source_root=source_root,
+            runtime=runtime,
+            meta=meta,
         ))
     return ctxs
 
