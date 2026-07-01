@@ -125,10 +125,17 @@ static PAYLOAD_REGISTRY: LazyLock<Mutex<PayloadRegistry>> =
     LazyLock::new(|| Mutex::new(PayloadRegistry::new()));
 
 const PAYLOAD_REGISTRY_MAX: usize = 512;
+/// Byte budget for the payload registry. Entries hold the *full base64
+/// payload* (a 5 MB screenshot is ~6.7 MB of base64), so a pure entry-count
+/// bound could still pin gigabytes of RAM across a screenshot-heavy session.
+/// Evicted payloads are re-registered by the next prepare pass that resolves
+/// the image, so the only cost of a tight budget is a string clone later.
+const PAYLOAD_REGISTRY_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 struct PayloadRegistry {
     map: std::collections::HashMap<u64, (String, String)>,
     order: std::collections::VecDeque<u64>,
+    total_bytes: usize,
 }
 
 impl PayloadRegistry {
@@ -136,21 +143,38 @@ impl PayloadRegistry {
         Self {
             map: std::collections::HashMap::new(),
             order: std::collections::VecDeque::new(),
+            total_bytes: 0,
         }
     }
 
-    fn insert(&mut self, id: u64, media_type: &str, data_b64: &str) {
+    /// Insert a payload. Returns true when the id was newly inserted (false
+    /// when it was already registered).
+    fn insert(&mut self, id: u64, media_type: &str, data_b64: &str) -> bool {
         if self.map.contains_key(&id) {
-            return;
+            return false;
         }
+        self.total_bytes = self
+            .total_bytes
+            .saturating_add(media_type.len() + data_b64.len());
         self.map
             .insert(id, (media_type.to_string(), data_b64.to_string()));
         self.order.push_back(id);
-        while self.order.len() > PAYLOAD_REGISTRY_MAX {
-            if let Some(old) = self.order.pop_front() {
-                self.map.remove(&old);
+        // Evict oldest-first past either bound, but never the entry just
+        // inserted: a single over-budget payload must stay resident or its
+        // image could never materialize.
+        while (self.order.len() > PAYLOAD_REGISTRY_MAX
+            || self.total_bytes > PAYLOAD_REGISTRY_MAX_BYTES)
+            && self.order.len() > 1
+        {
+            if let Some(old) = self.order.pop_front()
+                && let Some((media_type, data_b64)) = self.map.remove(&old)
+            {
+                self.total_bytes = self
+                    .total_bytes
+                    .saturating_sub(media_type.len() + data_b64.len());
             }
         }
+        true
     }
 
     fn get(&self, id: u64) -> Option<(String, String)> {
@@ -160,8 +184,14 @@ impl PayloadRegistry {
 
 /// Record an image payload so [`materialize_visible`] can decode it on demand.
 pub(crate) fn register_payload(id: u64, media_type: &str, data_b64: &str) {
-    if let Ok(mut reg) = PAYLOAD_REGISTRY.lock() {
-        reg.insert(id, media_type, data_b64);
+    let newly_inserted = match PAYLOAD_REGISTRY.lock() {
+        Ok(mut reg) => reg.insert(id, media_type, data_b64),
+        Err(_) => false,
+    };
+    // A fresh payload may succeed where a previously evicted/corrupt one
+    // failed, so give the prewarm pipeline its retries back.
+    if newly_inserted && let Ok(mut failures) = PREWARM_FAILURES.lock() {
+        failures.remove(&id);
     }
 }
 
@@ -197,6 +227,43 @@ static PREWARM_TX: OnceLock<mpsc::Sender<PrewarmRequest>> = OnceLock::new();
 static PREWARM_INFLIGHT: LazyLock<Mutex<HashSet<PrewarmRequest>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 
+/// Per-image count of failed materialize attempts. Without this memo an
+/// undecodable payload (or one evicted from the registry) would loop forever:
+/// draw schedules a prewarm, the worker fails and nudges a repaint, the
+/// repaint reschedules the same prewarm. After
+/// [`PREWARM_FAILURE_MAX_ATTEMPTS`] failures the id is skipped until
+/// [`register_payload`] sees a fresh payload for it.
+static PREWARM_FAILURES: LazyLock<Mutex<HashMap<u64, u8>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+const PREWARM_FAILURE_MAX_ATTEMPTS: u8 = 3;
+/// Bound the failure memo; it only holds pathological ids, so if it fills up
+/// something is systemically wrong and starting over is harmless.
+const PREWARM_FAILURES_MAX: usize = 512;
+
+fn prewarm_failures_exhausted(id: u64) -> bool {
+    PREWARM_FAILURES
+        .lock()
+        .ok()
+        .and_then(|failures| failures.get(&id).copied())
+        .is_some_and(|count| count >= PREWARM_FAILURE_MAX_ATTEMPTS)
+}
+
+fn record_prewarm_failure(id: u64) {
+    if let Ok(mut failures) = PREWARM_FAILURES.lock() {
+        if failures.len() >= PREWARM_FAILURES_MAX && !failures.contains_key(&id) {
+            failures.clear();
+        }
+        let count = failures.entry(id).or_insert(0);
+        *count = count.saturating_add(1);
+        if *count == PREWARM_FAILURE_MAX_ATTEMPTS {
+            crate::logging::warn(&format!(
+                "inline image {id:#018x} failed to materialize {PREWARM_FAILURE_MAX_ATTEMPTS} times; \
+                 suspending prewarm until its payload is re-registered"
+            ));
+        }
+    }
+}
+
 fn prewarm_sender() -> &'static mpsc::Sender<PrewarmRequest> {
     PREWARM_TX.get_or_init(|| {
         let (tx, rx) = mpsc::channel::<PrewarmRequest>();
@@ -215,10 +282,22 @@ fn prewarm_sender() -> &'static mpsc::Sender<PrewarmRequest> {
 
 fn prewarm_worker(rx: mpsc::Receiver<PrewarmRequest>) {
     for req in rx {
-        materialize_visible(req.id);
-        mermaid::prewarm_inline_fit_state(req.id, req.target_cols, req.target_rows, true);
+        let materialized = materialize_visible(req.id);
+        if materialized {
+            mermaid::prewarm_inline_fit_state(req.id, req.target_cols, req.target_rows, true);
+            if let Ok(mut failures) = PREWARM_FAILURES.lock() {
+                failures.remove(&req.id);
+            }
+        } else {
+            record_prewarm_failure(req.id);
+        }
         if let Ok(mut inflight) = PREWARM_INFLIGHT.lock() {
             inflight.remove(&req);
+        }
+        if !materialized {
+            // Nothing new to draw; nudging a repaint would only make the
+            // draw path reschedule this same failed request.
+            continue;
         }
         // Nudge the UI exactly like a finished deferred Mermaid render so the
         // placeholder fills in on the next frame without user input. The
@@ -265,6 +344,9 @@ pub(crate) fn ensure_drawable(id: u64, target_cols: u16, target_rows: u16) -> bo
 }
 
 fn schedule_prewarm(id: u64, target_cols: u16, target_rows: u16) {
+    if prewarm_failures_exhausted(id) {
+        return;
+    }
     let req = PrewarmRequest {
         id,
         target_cols,
@@ -969,6 +1051,59 @@ mod tests {
         register_payload(0xDEAD_BEEF, "image/png", "AAAA");
         let got = PAYLOAD_REGISTRY.lock().unwrap().get(0xDEAD_BEEF);
         assert_eq!(got, Some(("image/png".to_string(), "AAAA".to_string())));
+    }
+
+    /// The registry holds full base64 payloads, so it must be bounded by bytes
+    /// as well as entry count, and eviction must keep the byte accounting and
+    /// the map/order queue in sync. A single over-budget payload must survive
+    /// (or its image could never materialize).
+    #[test]
+    fn payload_registry_evicts_by_byte_budget() {
+        let mut reg = PayloadRegistry::new();
+        // Payloads sized so ~5 of them exceed the byte budget long before the
+        // 512-entry count bound.
+        let payload = "x".repeat(PAYLOAD_REGISTRY_MAX_BYTES / 4);
+        for id in 0..8u64 {
+            reg.insert(id, "image/png", &payload);
+            assert!(
+                reg.total_bytes <= PAYLOAD_REGISTRY_MAX_BYTES || reg.order.len() == 1,
+                "byte budget exceeded with {} entries / {} bytes",
+                reg.order.len(),
+                reg.total_bytes
+            );
+            assert_eq!(reg.map.len(), reg.order.len(), "map/order desynced");
+        }
+        // Newest payload always survives.
+        assert!(reg.get(7).is_some(), "newest payload must not be evicted");
+        // Oldest payloads were evicted to make room.
+        assert!(reg.get(0).is_none(), "oldest payload should be evicted");
+        // A single payload larger than the whole budget still gets stored.
+        let mut solo = PayloadRegistry::new();
+        let huge = "y".repeat(PAYLOAD_REGISTRY_MAX_BYTES + 1);
+        solo.insert(99, "image/png", &huge);
+        assert!(
+            solo.get(99).is_some(),
+            "an over-budget payload must stay resident so its image can draw"
+        );
+    }
+
+    /// Re-registering a payload must clear the prewarm failure memo so a fresh
+    /// payload gets its decode retries back.
+    #[test]
+    fn reregistering_payload_resets_prewarm_failures() {
+        const ID: u64 = 0xFA11_ED01;
+        for _ in 0..PREWARM_FAILURE_MAX_ATTEMPTS {
+            record_prewarm_failure(ID);
+        }
+        assert!(
+            prewarm_failures_exhausted(ID),
+            "failure memo should suspend prewarm after max attempts"
+        );
+        register_payload(ID, "image/png", "BBBB");
+        assert!(
+            !prewarm_failures_exhausted(ID),
+            "fresh payload registration must reset the failure memo"
+        );
     }
 
     /// 1x1 transparent PNG, used to exercise the real header parse.

@@ -701,7 +701,7 @@ fn render_mermaid_sized_internal(
     {
         let msg = "Mermaid rendering is disabled in this build".to_string();
         if let Ok(mut errors) = RENDER_ERRORS.lock() {
-            errors.insert(hash, msg.clone());
+            super::bounded_bookkeeping_insert(&mut errors, hash, msg.clone());
         }
         if let Ok(mut state) = MERMAID_DEBUG.lock() {
             state.stats.render_errors += 1;
@@ -848,7 +848,7 @@ fn render_mermaid_sized_internal(
             }
             Ok(Err(e)) => {
                 if let Ok(mut errors) = RENDER_ERRORS.lock() {
-                    errors.insert(hash, e.clone());
+                    super::bounded_bookkeeping_insert(&mut errors, hash, e.clone());
                 }
                 if let Ok(mut state) = MERMAID_DEBUG.lock() {
                     state.stats.render_errors += 1;
@@ -866,7 +866,7 @@ fn render_mermaid_sized_internal(
                     "unknown panic in mermaid renderer".to_string()
                 };
                 if let Ok(mut errors) = RENDER_ERRORS.lock() {
-                    errors.insert(hash, format!("Renderer panic: {}", msg));
+                    super::bounded_bookkeeping_insert(&mut errors, hash, format!("Renderer panic: {}", msg));
                 }
                 if let Ok(mut state) = MERMAID_DEBUG.lock() {
                     state.stats.render_errors += 1;

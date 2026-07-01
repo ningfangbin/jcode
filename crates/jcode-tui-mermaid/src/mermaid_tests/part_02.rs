@@ -148,3 +148,48 @@ fn image_scroll_steady_state_has_no_per_frame_stats_or_rebuilds() {
         "expected one cheap fit-state reuse per visible image per frame"
     );
 }
+
+/// `evict_old_cache` used to look only at `*.png`, so inline images cached in
+/// their source container format (`{hash}_inline.jpg` etc.) were never evicted
+/// and leaked on disk forever. The recognized-extension list must cover every
+/// extension `inline_image_extension` can produce.
+#[test]
+fn cache_eviction_recognizes_every_inline_extension() {
+    for media_type in [
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+        "image/bmp",
+        "image/x-icon",
+        "application/octet-stream", // falls back to "img"
+    ] {
+        let ext = crate::inline_image::mermaid_inline_extension_for_test(media_type);
+        assert!(
+            crate::CACHE_FILE_EXTENSIONS.contains(&ext),
+            "extension {ext:?} (from {media_type}) is written to the cache dir \
+             but would never be evicted by evict_old_cache"
+        );
+    }
+}
+
+/// The bounded bookkeeping insert must clear-and-restart instead of growing
+/// past its cap, while still recording the newest entry.
+#[test]
+fn bounded_bookkeeping_insert_caps_map_growth() {
+    let mut map: std::collections::HashMap<u64, u32> = std::collections::HashMap::new();
+    for hash in 0..(crate::RENDER_BOOKKEEPING_MAX as u64 * 2) {
+        crate::bounded_bookkeeping_insert(&mut map, hash, 0);
+        assert!(
+            map.len() <= crate::RENDER_BOOKKEEPING_MAX,
+            "bookkeeping map exceeded its cap at {} entries",
+            map.len()
+        );
+    }
+    let last = crate::RENDER_BOOKKEEPING_MAX as u64 * 2 - 1;
+    assert!(map.contains_key(&last), "newest entry must survive insert");
+    // Re-inserting an existing key at the cap must not clear the map.
+    let before = map.len();
+    crate::bounded_bookkeeping_insert(&mut map, last, 1);
+    assert_eq!(map.len(), before, "existing-key update must not clear");
+}

@@ -491,6 +491,22 @@ static LAST_RENDER: LazyLock<Mutex<HashMap<u64, LastRenderState>>> =
 static RENDER_ERRORS: LazyLock<Mutex<HashMap<u64, String>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// Cap for the LAST_RENDER / RENDER_ERRORS bookkeeping maps. Entries are tiny,
+/// but both maps are keyed by content hash and previously grew without bound
+/// over a long session. On overflow the map is simply cleared: LAST_RENDER only
+/// powers a skipped-render stat, and a cleared RENDER_ERRORS entry just means
+/// one failed diagram re-renders (and re-fails) once more.
+pub(crate) const RENDER_BOOKKEEPING_MAX: usize = 1024;
+
+/// Insert into a bounded bookkeeping map, clearing it if it would exceed
+/// [`RENDER_BOOKKEEPING_MAX`] distinct keys.
+pub(crate) fn bounded_bookkeeping_insert<V>(map: &mut HashMap<u64, V>, hash: u64, value: V) {
+    if map.len() >= RENDER_BOOKKEEPING_MAX && !map.contains_key(&hash) {
+        map.clear();
+    }
+    map.insert(hash, value);
+}
+
 /// Prevent unbounded growth when a long session contains many unique diagrams.
 const ACTIVE_DIAGRAMS_MAX: usize = 128;
 
@@ -984,6 +1000,12 @@ const CACHE_MAX_AGE_SECS: u64 = 3 * 24 * 60 * 60;
 /// Maximum total cache size (50 MB)
 const CACHE_MAX_SIZE_BYTES: u64 = 50 * 1024 * 1024;
 
+/// File extensions the render/materialize paths write into the cache dir.
+/// `evict_old_cache` must recognize every one of them: inline images keep
+/// their source container format (`{hash}_inline.jpg` etc.), so an extension
+/// missing here would never be evicted and leak on disk forever.
+const CACHE_FILE_EXTENSIONS: [&str; 7] = ["png", "jpg", "gif", "webp", "bmp", "ico", "img"];
+
 /// Evict old cache files on startup.
 pub fn evict_old_cache() {
     let cache_dir = match RENDER_CACHE.lock() {
@@ -1001,7 +1023,10 @@ pub fn evict_old_cache() {
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().is_some_and(|e| e == "png")
+        if path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| CACHE_FILE_EXTENSIONS.contains(&e))
             && let Ok(meta) = entry.metadata()
         {
             let size = meta.len();

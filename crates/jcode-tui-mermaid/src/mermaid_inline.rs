@@ -189,6 +189,13 @@ fn inline_image_extension(media_type: &str) -> &'static str {
     }
 }
 
+/// Test-only view of [`inline_image_extension`], used to prove the eviction
+/// path recognizes every extension the materialize path can write.
+#[cfg(test)]
+pub(crate) fn mermaid_inline_extension_for_test(media_type: &str) -> &'static str {
+    inline_image_extension(media_type)
+}
+
 /// Decode a bounded prefix of the base64 payload and try to read image
 /// dimensions straight from the container header (PNG/JPEG/GIF/BMP/WEBP).
 fn dims_from_b64_prefix(data_b64: &str) -> Option<(u32, u32)> {
