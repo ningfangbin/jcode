@@ -62,3 +62,11 @@ pub fn result_to_lines(result: RenderResult, _max_width: Option<usize>) -> Vec<L
         RenderResult::Error(message) => vec![Line::from(message)],
     }
 }
+
+pub fn parse_image_placeholder(_line: &Line<'_>) -> Option<u64> {
+    None
+}
+
+pub fn parse_inline_image_placeholder(_line: &Line<'_>) -> Option<(u64, u16, u16)> {
+    None
+}
