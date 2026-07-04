@@ -217,6 +217,19 @@ pub(super) fn compact_rendered_match_line(line: &str, args: &GrepArgs) -> String
     }
 }
 
+pub(super) fn compact_region_body_line(line: &str) -> String {
+    let char_count = line.chars().count();
+    if char_count <= MAX_RENDERED_MATCH_LINE_CHARS {
+        return line.to_string();
+    }
+    let snippet: String = line.chars().take(MAX_RENDERED_MATCH_LINE_CHARS).collect();
+    format!(
+        "{} … [truncated: {} chars after]",
+        snippet,
+        char_count - MAX_RENDERED_MATCH_LINE_CHARS
+    )
+}
+
 pub(super) fn render_find_output(result: &FindResult, args: &FindArgs) -> String {
     if args.paths_only {
         return result
@@ -430,7 +443,7 @@ fn render_smart_region(region: &SmartRegion, debug_score: bool, lines: &mut Vec<
         lines.push("       snippet:".to_string());
     }
     for line in region.body.lines() {
-        lines.push(format!("         {line}"));
+        lines.push(format!("         {}", compact_region_body_line(line)));
     }
     lines.push("       why:".to_string());
     for reason in &region.why {
