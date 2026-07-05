@@ -591,8 +591,15 @@ fn render_side_panel_markdown_multiple_mermaids_create_ordered_placements() {
 fn render_side_panel_markdown_without_protocol_falls_back_to_text_placeholder() {
     let page = sample_mermaid_page("```mermaid\nflowchart TD\n    A --> B\n```\n");
 
+    // Pin protocol availability OFF for this thread: PICKER is a
+    // process-global OnceLock that other tests (e.g. the mermaid
+    // flicker-bench debug test) initialize as a side effect, and
+    // VIDEO_EXPORT_MODE is a process-global atomic, so without the override
+    // this test is order-dependent under a parallel test run.
     let rendered = with_serialized_mermaid_state(|| {
-        render_side_panel_markdown_cached(&page, Rect::new(0, 0, 36, 20), false, true)
+        crate::tui::mermaid::with_image_protocol_override(Some(false), || {
+            render_side_panel_markdown_cached(&page, Rect::new(0, 0, 36, 20), false, true)
+        })
     });
     let text: Vec<String> = rendered
         .lines
@@ -782,7 +789,10 @@ fn render_side_panel_markdown_live_syncs_file_content() {
 #[test]
 fn render_side_panel_height_change_reuses_markdown_render_cache() {
     clear_side_panel_render_caches();
-    let before = markdown::debug_stats().total_renders;
+    // Use the thread-local render counter: the process-global
+    // debug_stats().total_renders races markdown renders on other test
+    // threads, making "no extra render" assertions order-dependent.
+    let before = markdown::thread_render_count();
     let page = crate::side_panel::SidePanelPage {
         id: "height_cache_demo".to_string(),
         title: "Height Cache Demo".to_string(),
@@ -795,9 +805,9 @@ fn render_side_panel_height_change_reuses_markdown_render_cache() {
     };
 
     let _first = render_side_panel_markdown_cached(&page, Rect::new(0, 0, 28, 18), false, false);
-    let after_first = markdown::debug_stats().total_renders;
+    let after_first = markdown::thread_render_count();
     let _second = render_side_panel_markdown_cached(&page, Rect::new(0, 0, 28, 26), false, false);
-    let after_second = markdown::debug_stats().total_renders;
+    let after_second = markdown::thread_render_count();
 
     assert!(
         after_first > before,
@@ -860,7 +870,8 @@ fn render_side_panel_content_change_with_same_revision_invalidates_cache() {
 #[test]
 fn prewarm_focused_side_panel_reuses_markdown_cache_on_first_draw() {
     clear_side_panel_render_caches();
-    let before = markdown::debug_stats().total_renders;
+    // Thread-local counter: see render_side_panel_height_change test.
+    let before = markdown::thread_render_count();
     let snapshot = crate::side_panel::SidePanelSnapshot {
         focused_page_id: Some("prewarm_demo".to_string()),
         pages: vec![crate::side_panel::SidePanelPage {
@@ -877,12 +888,12 @@ fn prewarm_focused_side_panel_reuses_markdown_cache_on_first_draw() {
     assert!(prewarm_focused_side_panel(
         &snapshot, 120, 40, 40, false, false
     ));
-    let after_prewarm = markdown::debug_stats().total_renders;
+    let after_prewarm = markdown::thread_render_count();
     let page = snapshot.focused_page().expect("focused page");
     let pane_area = estimate_side_panel_pane_area(120, 40, 40).expect("side panel area");
     let inner = side_panel_content_area(pane_area).expect("side panel content area");
     let _ = render_side_panel_markdown_cached(&page, inner, false, false);
-    let after_draw = markdown::debug_stats().total_renders;
+    let after_draw = markdown::thread_render_count();
 
     assert!(
         after_prewarm > before,

@@ -28,8 +28,8 @@ pub use jcode_tui_mermaid::{
     result_to_content, result_to_lines, set_log_hooks, set_memory_snapshot_hook,
     set_render_completed_hook, set_streaming_preview_diagram, set_video_export_mode,
     snapshot_active_diagrams, transcript_preferred_aspect_ratio,
-    transcript_preferred_aspect_ratio_with_font, with_preferred_aspect_ratio,
-    write_video_export_marker,
+    transcript_preferred_aspect_ratio_with_font, with_image_protocol_override,
+    with_preferred_aspect_ratio, write_video_export_marker,
 };
 pub use jcode_tui_mermaid::{ImageScrollBenchmark, cache_stat_syscalls};
 

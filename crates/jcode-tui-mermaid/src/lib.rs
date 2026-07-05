@@ -252,7 +252,7 @@ pub use runtime::force_test_kitty_picker;
 pub use runtime::{
     error_lines_for, get_cached_png, get_font_size, image_protocol_available, init_picker,
     is_video_export_mode, protocol_type, register_external_image, register_inline_image,
-    set_video_export_mode,
+    set_video_export_mode, with_image_protocol_override,
 };
 pub use viewport_render::{
     InlineFitReadiness, inline_fit_readiness, invalidate_render_state, prewarm_inline_fit_state,

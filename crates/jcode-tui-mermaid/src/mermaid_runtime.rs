@@ -331,7 +331,35 @@ pub fn protocol_type() -> Option<ProtocolType> {
     }
 }
 
+thread_local! {
+    /// Scoped test override for image-protocol availability. The real signal
+    /// (PICKER) is a process-global OnceLock that any test can initialize as
+    /// a side effect, so "no protocol" tests need a thread-local pin instead
+    /// of relying on process-wide ordering.
+    static IMAGE_PROTOCOL_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Run `f` with image-protocol availability forced on/off on the current
+/// thread (or `None` to restore the real detection).
+pub fn with_image_protocol_override<T>(enabled: Option<bool>, f: impl FnOnce() -> T) -> T {
+    IMAGE_PROTOCOL_OVERRIDE.with(|cell| {
+        let prev = cell.replace(enabled);
+        struct Reset<'a>(&'a std::cell::Cell<Option<bool>>, Option<bool>);
+        impl Drop for Reset<'_> {
+            fn drop(&mut self) {
+                self.0.set(self.1);
+            }
+        }
+        let _reset = Reset(cell, prev);
+        f()
+    })
+}
+
 pub fn image_protocol_available() -> bool {
+    if let Some(enabled) = IMAGE_PROTOCOL_OVERRIDE.with(|cell| cell.get()) {
+        return enabled;
+    }
     PICKER.get().and_then(|p| p.as_ref()).is_some() || VIDEO_EXPORT_MODE.load(Ordering::Relaxed)
 }
 
