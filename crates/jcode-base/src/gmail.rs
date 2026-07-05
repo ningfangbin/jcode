@@ -881,15 +881,15 @@ pub struct MessagePayload {
 
 impl MessagePayload {
     fn collect_attachments(&self, out: &mut Vec<AttachmentInfo>) {
-        if let Some(ref filename) = self.filename {
-            if !filename.is_empty() {
-                out.push(AttachmentInfo {
-                    filename: filename.clone(),
-                    mime_type: self.mime_type.clone(),
-                    size: self.body.as_ref().and_then(|b| b.size),
-                    attachment_id: self.body.as_ref().and_then(|b| b.attachment_id.clone()),
-                });
-            }
+        if let Some(ref filename) = self.filename
+            && !filename.is_empty()
+        {
+            out.push(AttachmentInfo {
+                filename: filename.clone(),
+                mime_type: self.mime_type.clone(),
+                size: self.body.as_ref().and_then(|b| b.size),
+                attachment_id: self.body.as_ref().and_then(|b| b.attachment_id.clone()),
+            });
         }
         if let Some(ref parts) = self.parts {
             for part in parts {

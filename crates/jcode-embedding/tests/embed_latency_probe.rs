@@ -35,7 +35,9 @@ fn embed_latency_probe() {
     let load = load_start.elapsed();
 
     // Warm once (first run pays one-time plan setup).
-    let _ = embedder.embed("warmup sentence for the embedding probe").expect("warm embed");
+    let _ = embedder
+        .embed("warmup sentence for the embedding probe")
+        .expect("warm embed");
 
     const ITERS: usize = 10;
     let texts: Vec<String> = (0..ITERS)

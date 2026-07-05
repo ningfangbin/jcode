@@ -148,7 +148,12 @@ fn item(id: &str, content: &str, status: &str, blocked_by: &[&str]) -> PlanItem 
 
 fn probe(name: &str, src: &str) -> bool {
     match jcode_tui_mermaid::render_mermaid_untracked(src, Some(100)) {
-        jcode_tui_mermaid::RenderResult::Image { width, height, path, .. } => {
+        jcode_tui_mermaid::RenderResult::Image {
+            width,
+            height,
+            path,
+            ..
+        } => {
             println!("OK   {name}: {width}x{height} -> {}", path.display());
             true
         }
@@ -169,7 +174,10 @@ fn main() {
     let real: Vec<PlanItem> = serde_json::from_str(fixture).expect("fixture parses");
     println!("fixture items: {}", real.len());
     let src_a = swarm_plan_mermaid(&real).expect("graph");
-    println!("--- (a) real plan mermaid ({} lines) ---\n{src_a}", src_a.lines().count());
+    println!(
+        "--- (a) real plan mermaid ({} lines) ---\n{src_a}",
+        src_a.lines().count()
+    );
     ok &= probe("a-real-plan-full", &src_a);
     let src_a23 = swarm_plan_mermaid(&real[..real.len().min(23)]).expect("graph");
     ok &= probe("a23-real-plan-23", &src_a23);
@@ -179,7 +187,12 @@ fn main() {
         .map(|i: usize| {
             let dep = format!("t{}", i.saturating_sub(1));
             let deps: Vec<&str> = if i == 0 { vec![] } else { vec![dep.as_str()] };
-            item(&format!("t{i}"), &format!("task number {i}"), "queued", &deps)
+            item(
+                &format!("t{i}"),
+                &format!("task number {i}"),
+                "queued",
+                &deps,
+            )
         })
         .collect();
     let src_b = swarm_plan_mermaid(&items_b).expect("graph");
@@ -188,19 +201,24 @@ fn main() {
 
     // (c) label at exactly MAX_LABEL_CHARS with unicode glyphs (no truncation
     // ellipsis should appear) and one char over (ellipsis should appear).
-    let exact: String = "日本語テスト🎯émü→".chars().cycle().take(MAX_LABEL_CHARS).collect();
+    let exact: String = "日本語テスト🎯émü→"
+        .chars()
+        .cycle()
+        .take(MAX_LABEL_CHARS)
+        .collect();
     assert_eq!(exact.chars().count(), MAX_LABEL_CHARS);
-    let over: String = "日本語テスト🎯émü→".chars().cycle().take(MAX_LABEL_CHARS + 1).collect();
+    let over: String = "日本語テスト🎯émü→"
+        .chars()
+        .cycle()
+        .take(MAX_LABEL_CHARS + 1)
+        .collect();
     let items_c = vec![
         item("uni-exact", &exact, "running", &[]),
         item("uni-over", &over, "queued", &["uni-exact"]),
     ];
     let src_c = swarm_plan_mermaid(&items_c).expect("graph");
     println!("--- (c) unicode mermaid ---\n{src_c}");
-    assert!(
-        !src_c.lines().next().is_none(),
-        "unreachable"
-    );
+    assert!(src_c.lines().next().is_some(), "unreachable");
     ok &= probe("c-unicode-max-label", &src_c);
 
     // (d) hostile label chars that sanitize_label passes through unchanged:
@@ -209,7 +227,12 @@ fn main() {
         item("h1", "backtick `code` and backslash \\ path", "queued", &[]),
         item("h2", "hash # percent % amp & semi;colon", "queued", &["h1"]),
         item("h3", "angle <b>bold</b> pipe | (parens)", "queued", &["h2"]),
-        item("h4", "entity-ish &lt;#35; #quot; %%{init}%%", "queued", &["h3"]),
+        item(
+            "h4",
+            "entity-ish &lt;#35; #quot; %%{init}%%",
+            "queued",
+            &["h3"],
+        ),
     ];
     let src_d = swarm_plan_mermaid(&items_d).expect("graph");
     println!("--- (d) hostile-label mermaid ---\n{src_d}");
@@ -243,7 +266,10 @@ fn main() {
     ];
     let src_e = swarm_plan_mermaid(&items_e).expect("graph");
     println!("--- (e) duplicate-id + self-dep mermaid ---\n{src_e}");
-    let decl_count = src_e.lines().filter(|l| l.trim_start().starts_with("t_a_1[")).count();
+    let decl_count = src_e
+        .lines()
+        .filter(|l| l.trim_start().starts_with("t_a_1["))
+        .count();
     println!("     (e) t_a_1 declared {decl_count} times (collision => silent merge)");
     let self_edge = src_e.contains("t_a_1 --> t_a_1");
     println!("     (e) self-edge t_a_1 --> t_a_1 present: {self_edge}");
@@ -254,16 +280,27 @@ fn main() {
     let mut items_f: Vec<PlanItem> = (0..MAX_GRAPH_NODES - 1)
         .map(|i| item(&format!("f{i}"), &format!("filler {i}"), "queued", &[]))
         .collect();
-    items_f.insert(0, item("more", "a task literally named more", "running", &[]));
+    items_f.insert(
+        0,
+        item("more", "a task literally named more", "running", &[]),
+    );
     // push past MAX so the summary node is emitted
     for i in 0..5 {
-        items_f.push(item(&format!("extra{i}"), &format!("extra {i}"), "queued", &[]));
+        items_f.push(item(
+            &format!("extra{i}"),
+            &format!("extra {i}"),
+            "queued",
+            &[],
+        ));
     }
     let src_f = swarm_plan_mermaid(&items_f).expect("graph");
     assert!(src_f.contains("t_more["), "prefixed more node missing");
     assert!(src_f.contains("\n    more["), "summary more node missing");
     ok &= probe("f-more-id-collision", &src_f);
 
-    println!("\nresult: {}", if ok { "ALL OK" } else { "FAILURES PRESENT" });
+    println!(
+        "\nresult: {}",
+        if ok { "ALL OK" } else { "FAILURES PRESENT" }
+    );
     std::process::exit(if ok { 0 } else { 1 });
 }

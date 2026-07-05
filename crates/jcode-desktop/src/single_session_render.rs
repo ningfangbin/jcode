@@ -1137,10 +1137,26 @@ pub(crate) fn push_streaming_activity_cue(
     }
 
     if let Some(visual) = exiting {
-        push_streaming_activity_cue_visual(vertices, app, size, tick, motion_seconds, viewport, visual);
+        push_streaming_activity_cue_visual(
+            vertices,
+            app,
+            size,
+            tick,
+            motion_seconds,
+            viewport,
+            visual,
+        );
     }
     if let Some(visual) = current {
-        push_streaming_activity_cue_visual(vertices, app, size, tick, motion_seconds, viewport, visual);
+        push_streaming_activity_cue_visual(
+            vertices,
+            app,
+            size,
+            tick,
+            motion_seconds,
+            viewport,
+            visual,
+        );
     }
 }
 

@@ -376,7 +376,10 @@ fn wrapped_tool_lines_keep_hanging_indent_inside_card_inset() {
     push_wrapped_body_line_ref(&mut prose_wrapped, &prose, 20);
     assert!(prose_wrapped.len() > 1);
     for row in &prose_wrapped {
-        assert!(!row.text.starts_with(' '), "prose keeps flush left: {row:?}");
+        assert!(
+            !row.text.starts_with(' '),
+            "prose keeps flush left: {row:?}"
+        );
     }
 }
 

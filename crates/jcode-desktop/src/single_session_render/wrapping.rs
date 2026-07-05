@@ -271,8 +271,15 @@ pub(super) fn hanging_indent_columns(text: &str, max_columns: usize) -> usize {
     if let Some(glyph) = chars.peek().copied()
         && matches!(
             glyph,
-            '\u{25cf}' | '\u{25cb}' | '\u{2713}' | '\u{2715}' | '\u{2022}' | '\u{25e6}'
-                | '\u{25aa}' | '\u{25b8}' | '\u{25be}'
+            '\u{25cf}'
+                | '\u{25cb}'
+                | '\u{2713}'
+                | '\u{2715}'
+                | '\u{2022}'
+                | '\u{25e6}'
+                | '\u{25aa}'
+                | '\u{25b8}'
+                | '\u{25be}'
         )
     {
         chars.next();
@@ -281,7 +288,11 @@ pub(super) fn hanging_indent_columns(text: &str, max_columns: usize) -> usize {
         }
     }
     // Keep a readable measure: skip the hang when it would crowd the row.
-    if columns + 12 > max_columns { 0 } else { columns }
+    if columns + 12 > max_columns {
+        0
+    } else {
+        columns
+    }
 }
 
 fn hang_wrapped_line_text(line: &str, first: bool, hang: usize) -> String {
@@ -435,9 +446,7 @@ pub(super) fn word_wrap_split_index(text: &str, max_columns: usize) -> usize {
         .rev()
         // U+00A0 exists to forbid breaking, so it never becomes a split point
         // (used by keyboard-hint lines to keep "Ctrl+V paste" pairs together).
-        .find_map(|(index, ch)| {
-            (ch.is_whitespace() && ch != '\u{a0}').then_some(index)
-        })
+        .find_map(|(index, ch)| (ch.is_whitespace() && ch != '\u{a0}').then_some(index))
         .filter(|index| *index > 0)
         .unwrap_or(hard_split)
 }

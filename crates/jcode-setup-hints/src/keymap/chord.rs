@@ -267,10 +267,7 @@ mod tests {
             KeyChord::parse("cmd+shift+'").unwrap().display_super(),
             "Super+Shift+'"
         );
-        assert_eq!(
-            KeyChord::parse("cmd+[").unwrap().display_super(),
-            "Super+["
-        );
+        assert_eq!(KeyChord::parse("cmd+[").unwrap().display_super(), "Super+[");
         assert_eq!(
             KeyChord::parse("cmd+\\").unwrap().display_super(),
             "Super+\\"
