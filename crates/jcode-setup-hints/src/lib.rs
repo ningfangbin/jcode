@@ -167,9 +167,9 @@ pub const HOTKEY_LISTENER_VERSION: u32 = 5;
 /// to a user (across all launches and platforms). After this many nudges we stop
 /// asking, even if the user never explicitly picked "Don't ask again".
 pub const MAX_TERMINAL_NUDGES: u64 = 5;
-#[cfg(any(test, target_os = "macos", target_os = "linux"))]
+#[cfg(any(test, target_os = "macos", target_os = "linux", windows))]
 const LAUNCH_HOTKEY_LEARNED_USES: u64 = 3;
-#[cfg(any(test, target_os = "macos", target_os = "linux"))]
+#[cfg(any(test, target_os = "macos", target_os = "linux", windows))]
 const LAUNCH_HOTKEY_NOTICE_MIN_LAUNCHES_TO_STOP: u64 = 10;
 
 #[derive(Debug, Clone, Default)]
@@ -1179,6 +1179,8 @@ pub fn maybe_show_setup_hints() -> Option<StartupHints> {
 
     #[cfg(windows)]
     {
+        let startup_hints =
+            startup_hints.or_else(|| windows_setup::windows_launch_hotkeys_notice(&state));
         return maybe_show_windows_setup_hints(&mut state, startup_hints);
     }
 
@@ -1896,23 +1898,38 @@ pub fn run_setup_launcher() -> Result<()> {
         }
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
     {
-        eprintln!("Launcher setup is currently only supported on macOS.");
+        let mut state = SetupHintsState::load();
+        eprintln!("\x1b[1mjcode setup-launcher\x1b[0m");
+        eprintln!();
+        match create_windows_desktop_shortcut(&mut state) {
+            Ok(()) => {
+                eprintln!("  \x1b[32m✓\x1b[0m Created desktop shortcut: jcode.lnk");
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("  \x1b[31m✗\x1b[0m Failed: {}", e);
+                anyhow::bail!("Windows launcher setup failed: {}", e);
+            }
+        }
+    }
+
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        eprintln!("Launcher setup is currently only supported on macOS and Windows.");
         Ok(())
     }
 }
 
 /// Create a desktop shortcut/launcher for jcode.
 ///
-/// - Windows: creates a .lnk shortcut on the Desktop
 /// - macOS: creates a jcode.app bundle in ~/Applications/
+/// - Windows uses [`windows_setup::create_windows_desktop_shortcut`] via
+///   `jcode setup-launcher` instead (PowerShell/COM is too slow for the
+///   startup path).
+#[cfg(not(windows))]
 fn create_desktop_shortcut(state: &mut SetupHintsState) -> Result<()> {
-    #[cfg(windows)]
-    {
-        create_windows_desktop_shortcut(state)?;
-    }
-
     #[cfg(any(test, target_os = "macos"))]
     {
         let (app_dir, _terminal) = install_macos_app_launcher()?;
@@ -1923,7 +1940,7 @@ fn create_desktop_shortcut(state: &mut SetupHintsState) -> Result<()> {
         jcode_logging::info(&format!("Created macOS app bundle: {}", app_dir.display()));
     }
 
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(not(any(test, target_os = "macos")))]
     {
         state.desktop_shortcut_created = true;
         let _ = state.save();
@@ -1990,6 +2007,11 @@ pub fn reinstall_launch_hotkeys_after_config_change() {
             )),
             Err(err) => jcode_logging::warn(&format!("failed to reinstall launch hotkeys: {err}")),
         }
+    }
+
+    #[cfg(windows)]
+    {
+        windows_setup::reinstall_windows_launch_hotkeys();
     }
 
     #[cfg(target_os = "linux")]

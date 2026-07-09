@@ -215,8 +215,10 @@ pub(crate) fn render_sway_bind_line(bind: &ScriptBind) -> Option<String> {
 }
 
 /// Render the full managed block for a flat `#`-commented config. `render_line`
-/// is the per-compositor bind renderer. Hotkeys that cannot be expressed are
-/// skipped; returns `None` when nothing could be rendered.
+/// is the per-compositor bind renderer. Each bind is preceded by a label
+/// comment on its own line (i3 only supports whole-line comments, so labels
+/// are never appended to the bind line itself). Hotkeys that cannot be
+/// expressed are skipped; returns `None` when nothing could be rendered.
 pub(crate) fn render_flat_block(
     binds: &[ScriptBind],
     render_line: impl Fn(&ScriptBind) -> Option<String>,
@@ -224,7 +226,8 @@ pub(crate) fn render_flat_block(
     let mut lines: Vec<String> = Vec::new();
     for bind in binds {
         if let Some(line) = render_line(bind) {
-            lines.push(format!("{line} # jcode: {label}", label = bind.label));
+            lines.push(format!("# jcode: {label}", label = bind.label));
+            lines.push(line);
         }
     }
     if lines.is_empty() {
