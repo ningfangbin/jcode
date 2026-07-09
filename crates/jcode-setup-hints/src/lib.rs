@@ -763,13 +763,11 @@ pub fn run_setup_hotkey(_listen_macos_hotkey: bool) -> Result<()> {
         }
 
         eprintln!(
-            "Automatic global hotkey setup on Linux supports niri, Hyprland (omarchy), sway, and i3."
+            "Automatic global hotkey setup on Linux supports niri, Hyprland (omarchy), sway, i3, bspwm, GNOME, KDE Plasma, Cinnamon, MATE, and XFCE."
         );
         eprintln!("Your session does not appear to be one of these.");
         eprintln!();
-        eprintln!("Add a keybinding in your desktop environment instead:");
-        eprintln!("  - GNOME: Settings > Keyboard > Custom Shortcuts");
-        eprintln!("  - KDE: System Settings > Shortcuts > Custom Shortcuts");
+        eprintln!("Add a keybinding in your desktop environment's keyboard settings instead.");
         return Ok(());
     }
 
@@ -1275,7 +1273,7 @@ fn xdg_config_home() -> Option<PathBuf> {
 
 /// Config file jcode manages for a flat (`#`-commented) compositor config.
 /// For i3 the legacy `~/.i3/config` location is honored when the XDG path is
-/// missing.
+/// missing. GNOME/KDE do not use a spliceable config file and return `None`.
 #[cfg(target_os = "linux")]
 fn flat_compositor_config_path(comp: linux_env::LinuxCompositor) -> Option<PathBuf> {
     use linux_env::LinuxCompositor;
@@ -1284,6 +1282,7 @@ fn flat_compositor_config_path(comp: linux_env::LinuxCompositor) -> Option<PathB
         LinuxCompositor::Niri => niri_config_path(),
         LinuxCompositor::Hyprland => Some(base.join("hypr").join("hyprland.conf")),
         LinuxCompositor::Sway => Some(base.join("sway").join("config")),
+        LinuxCompositor::Bspwm => Some(base.join("sxhkd").join("sxhkdrc")),
         LinuxCompositor::I3 => {
             let xdg = base.join("i3").join("config");
             if xdg.exists() {
@@ -1292,7 +1291,27 @@ fn flat_compositor_config_path(comp: linux_env::LinuxCompositor) -> Option<PathB
             let legacy = dirs::home_dir()?.join(".i3").join("config");
             if legacy.exists() { Some(legacy) } else { Some(xdg) }
         }
+        LinuxCompositor::Gnome
+        | LinuxCompositor::Kde
+        | LinuxCompositor::Cinnamon
+        | LinuxCompositor::Mate
+        | LinuxCompositor::Xfce => None,
     }
+}
+
+/// KDE's global-shortcuts registry file.
+#[cfg(target_os = "linux")]
+fn kde_globalshortcutsrc_path() -> Option<PathBuf> {
+    Some(xdg_config_home()?.join("kglobalshortcutsrc"))
+}
+
+/// Directory for jcode's hidden KDE launcher desktop files.
+#[cfg(target_os = "linux")]
+fn kde_applications_dir() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|h| h.join(".local").join("share")))?;
+    Some(base.join("applications"))
 }
 
 /// The config file jcode would manage for the *current* session's compositor.
@@ -1300,7 +1319,27 @@ fn flat_compositor_config_path(comp: linux_env::LinuxCompositor) -> Option<PathB
 fn linux_hotkey_config_path(comp: linux_env::LinuxCompositor) -> Option<PathBuf> {
     match comp {
         linux_env::LinuxCompositor::Niri => niri_config_path(),
+        linux_env::LinuxCompositor::Kde => kde_globalshortcutsrc_path(),
         other => flat_compositor_config_path(other),
+    }
+}
+
+/// Human description of where the binds land, for the startup notice footer.
+#[cfg(target_os = "linux")]
+fn linux_hotkey_target_description(comp: linux_env::LinuxCompositor) -> String {
+    use linux_env::LinuxCompositor;
+    match comp {
+        LinuxCompositor::Gnome => "GNOME custom shortcuts (via dconf)".to_string(),
+        LinuxCompositor::Kde => "KDE global shortcuts (kglobalshortcutsrc)".to_string(),
+        LinuxCompositor::Cinnamon => "Cinnamon custom shortcuts (via dconf)".to_string(),
+        LinuxCompositor::Mate => "MATE custom shortcuts (via dconf)".to_string(),
+        LinuxCompositor::Xfce => "XFCE keyboard shortcuts (via xfconf)".to_string(),
+        other => {
+            let path = linux_hotkey_config_path(other)
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "its config".to_string());
+            format!("your {} config ({})", other.name(), path)
+        }
     }
 }
 
@@ -1313,14 +1352,28 @@ fn linux_hotkey_sentinel(comp: linux_env::LinuxCompositor) -> &'static str {
     }
 }
 
-/// Whether jcode's launch hotkeys are already installed in the compositor
-/// config for `comp`.
+/// Whether jcode's launch hotkeys are already installed for `comp`.
 #[cfg(target_os = "linux")]
 fn linux_hotkeys_installed(comp: linux_env::LinuxCompositor) -> bool {
-    linux_hotkey_config_path(comp)
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .map(|text| text.contains(linux_hotkey_sentinel(comp)))
-        .unwrap_or(false)
+    use linux_env::LinuxCompositor;
+    match comp {
+        LinuxCompositor::Gnome => gnome_keybinding_list().contains("/jcode-launch-"),
+        LinuxCompositor::Cinnamon => {
+            dconf_read("/org/cinnamon/desktop/keybindings/custom-list")
+                .contains("jcode-launch-")
+        }
+        LinuxCompositor::Mate => dconf_list("/org/mate/desktop/keybindings/")
+            .contains("jcode-launch-"),
+        LinuxCompositor::Xfce => xfce_shortcut_commands_text().contains("/launch_jcode_"),
+        LinuxCompositor::Kde => kde_globalshortcutsrc_path()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .map(|text| text.contains("[services][jcode-launch-"))
+            .unwrap_or(false),
+        other => linux_hotkey_config_path(other)
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .map(|text| text.contains(linux_hotkey_sentinel(other)))
+            .unwrap_or(false),
+    }
 }
 
 /// Pick a terminal emulator to launch jcode in on Linux. Honors `$TERMINAL`,
@@ -1397,16 +1450,27 @@ fn resolve_linux_hotkeys() -> Vec<linux_niri::NiriHotkey> {
 fn linux_chord_expressible(comp: linux_env::LinuxCompositor, chord: &keymap::KeyChord) -> bool {
     match comp {
         linux_env::LinuxCompositor::Niri => linux_niri::chord_to_niri_bind(chord).is_some(),
+        linux_env::LinuxCompositor::Kde => linux_env::kde_shortcut(chord).is_some(),
+        linux_env::LinuxCompositor::Gnome
+        | linux_env::LinuxCompositor::Cinnamon
+        | linux_env::LinuxCompositor::Mate
+        | linux_env::LinuxCompositor::Xfce => linux_env::gnome_binding(chord).is_some(),
         _ => linux_env::xkb_key_name(&chord.key).is_some(),
     }
 }
 
 /// Install (or refresh) the launch hotkeys for the detected compositor.
-/// Returns `Ok(true)` if the config file was changed.
+/// Returns `Ok(true)` if anything was changed.
 #[cfg(target_os = "linux")]
 fn install_linux_launch_hotkeys(comp: linux_env::LinuxCompositor) -> Result<bool> {
+    use linux_env::LinuxCompositor;
     match comp {
-        linux_env::LinuxCompositor::Niri => install_niri_launch_hotkeys(),
+        LinuxCompositor::Niri => install_niri_launch_hotkeys(),
+        LinuxCompositor::Gnome => install_gnome_launch_hotkeys(),
+        LinuxCompositor::Kde => install_kde_launch_hotkeys(),
+        LinuxCompositor::Cinnamon => install_cinnamon_launch_hotkeys(),
+        LinuxCompositor::Mate => install_mate_launch_hotkeys(),
+        LinuxCompositor::Xfce => install_xfce_launch_hotkeys(),
         other => install_flat_launch_hotkeys(other),
     }
 }
@@ -1477,7 +1541,15 @@ fn install_flat_launch_hotkeys(comp: linux_env::LinuxCompositor) -> Result<bool>
         linux_env::LinuxCompositor::Sway | linux_env::LinuxCompositor::I3 => {
             linux_env::render_sway_block(&binds)
         }
-        linux_env::LinuxCompositor::Niri => unreachable!("niri handled separately"),
+        linux_env::LinuxCompositor::Bspwm => linux_env::render_sxhkd_block(&binds),
+        linux_env::LinuxCompositor::Niri
+        | linux_env::LinuxCompositor::Gnome
+        | linux_env::LinuxCompositor::Kde
+        | linux_env::LinuxCompositor::Cinnamon
+        | linux_env::LinuxCompositor::Mate
+        | linux_env::LinuxCompositor::Xfce => {
+            unreachable!("handled by dedicated install paths")
+        }
     };
     let Some(block) = block else {
         anyhow::bail!("no installable launch hotkeys for {}", comp.name());
@@ -1503,6 +1575,300 @@ fn install_flat_launch_hotkeys(comp: linux_env::LinuxCompositor) -> Result<bool>
 
     reload_compositor_config(comp);
     Ok(true)
+}
+
+/// Read one dconf key's textual value. Empty string on any failure (missing
+/// dconf, unset key, etc.).
+#[cfg(target_os = "linux")]
+fn dconf_read(path: &str) -> String {
+    std::process::Command::new("dconf")
+        .args(["read", path])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
+}
+
+/// List a dconf directory's children. Empty string on failure.
+#[cfg(target_os = "linux")]
+fn dconf_list(dir: &str) -> String {
+    std::process::Command::new("dconf")
+        .args(["list", dir])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default()
+}
+
+/// Read GNOME's custom-keybindings list via dconf.
+#[cfg(target_os = "linux")]
+fn gnome_keybinding_list() -> String {
+    dconf_read("/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings")
+}
+
+/// Write one dconf key. Errors bubble up so a missing dconf binary fails the
+/// install with a clear message. dconf is used instead of gsettings because it
+/// does not require the settings-daemon schemas to be installed in the running
+/// environment, and the desktops' media-keys plugins read dconf directly.
+#[cfg(target_os = "linux")]
+fn dconf_write(path: &str, value: &str) -> Result<()> {
+    let status = std::process::Command::new("dconf")
+        .args(["write", path, value])
+        .status()
+        .context("failed to run dconf (is this a GNOME-family session?)")?;
+    if !status.success() {
+        anyhow::bail!("dconf write {path} failed with {status}");
+    }
+    Ok(())
+}
+
+/// Write one dconf key only when its value differs; reports whether a write
+/// happened so installers can distinguish "installed" from "already up to
+/// date".
+#[cfg(target_os = "linux")]
+fn dconf_write_checked(path: &str, value: &str) -> Result<bool> {
+    if dconf_read(path) == value {
+        return Ok(false);
+    }
+    dconf_write(path, value)?;
+    Ok(true)
+}
+
+/// Quote a string as a GVariant string literal for `dconf write`.
+#[cfg(target_os = "linux")]
+fn gvariant_string(value: &str) -> String {
+    format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
+}
+
+/// Install (or refresh) the launch hotkeys as GNOME custom keybindings via
+/// dconf. Slot-stable paths make re-installs overwrite in place, and the
+/// custom-keybindings list merge preserves the user's own entries. GNOME
+/// applies dconf changes immediately; no reload needed.
+#[cfg(target_os = "linux")]
+fn install_gnome_launch_hotkeys() -> Result<bool> {
+    let binds = write_linux_launch_scripts()?;
+    let keybindings = linux_env::gnome_keybindings(&binds);
+    if keybindings.is_empty() {
+        anyhow::bail!("no installable launch hotkeys for GNOME");
+    }
+
+    // Point the custom-keybindings list at our slots (plus everything the
+    // user already had).
+    let list_path = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings";
+    let current = gnome_keybinding_list();
+    let ours: Vec<String> = keybindings.iter().map(|kb| kb.path.clone()).collect();
+    let merged = linux_env::merge_gnome_keybinding_list(&current, &ours);
+    let mut changed = dconf_write_checked(list_path, &merged)?;
+
+    for kb in &keybindings {
+        changed |= dconf_write_checked(&format!("{}name", kb.path), &gvariant_string(&kb.name))?;
+        changed |=
+            dconf_write_checked(&format!("{}command", kb.path), &gvariant_string(&kb.command))?;
+        changed |=
+            dconf_write_checked(&format!("{}binding", kb.path), &gvariant_string(&kb.binding))?;
+    }
+
+    jcode_logging::info(&format!(
+        "installed {} GNOME launch hotkey(s) via dconf",
+        keybindings.len()
+    ));
+    Ok(changed)
+}
+
+/// Install (or refresh) the launch hotkeys as Cinnamon custom keybindings.
+/// Same dconf-backed shape as GNOME but under `/org/cinnamon/`, with slot
+/// names (not paths) in `custom-list` and array-typed bindings.
+#[cfg(target_os = "linux")]
+fn install_cinnamon_launch_hotkeys() -> Result<bool> {
+    let binds = write_linux_launch_scripts()?;
+    let keybindings = linux_env::dconf_keybindings(&binds);
+    if keybindings.is_empty() {
+        anyhow::bail!("no installable launch hotkeys for Cinnamon");
+    }
+
+    let list_path = "/org/cinnamon/desktop/keybindings/custom-list";
+    let current = dconf_read(list_path);
+    let ours: Vec<String> = keybindings.iter().map(|kb| kb.slot.clone()).collect();
+    let merged = linux_env::merge_gnome_keybinding_list(&current, &ours);
+    let mut changed = dconf_write_checked(list_path, &merged)?;
+
+    for kb in &keybindings {
+        let base = format!(
+            "/org/cinnamon/desktop/keybindings/custom-keybindings/{}/",
+            kb.slot
+        );
+        changed |= dconf_write_checked(&format!("{base}name"), &gvariant_string(&kb.name))?;
+        changed |= dconf_write_checked(&format!("{base}command"), &gvariant_string(&kb.command))?;
+        // Cinnamon bindings are arrays of accelerator strings.
+        changed |= dconf_write_checked(
+            &format!("{base}binding"),
+            &format!("[{}]", gvariant_string(&kb.binding)),
+        )?;
+    }
+
+    jcode_logging::info(&format!(
+        "installed {} Cinnamon launch hotkey(s) via dconf",
+        keybindings.len()
+    ));
+    Ok(changed)
+}
+
+/// Install (or refresh) the launch hotkeys as MATE custom keybindings under
+/// `/org/mate/desktop/keybindings/`. MATE discovers slots from the dconf tree
+/// itself, so there is no master list to merge.
+#[cfg(target_os = "linux")]
+fn install_mate_launch_hotkeys() -> Result<bool> {
+    let binds = write_linux_launch_scripts()?;
+    let keybindings = linux_env::dconf_keybindings(&binds);
+    if keybindings.is_empty() {
+        anyhow::bail!("no installable launch hotkeys for MATE");
+    }
+
+    let mut changed = false;
+    for kb in &keybindings {
+        let base = format!("/org/mate/desktop/keybindings/{}/", kb.slot);
+        changed |= dconf_write_checked(&format!("{base}name"), &gvariant_string(&kb.name))?;
+        // MATE calls the command key `action`.
+        changed |= dconf_write_checked(&format!("{base}action"), &gvariant_string(&kb.command))?;
+        changed |= dconf_write_checked(&format!("{base}binding"), &gvariant_string(&kb.binding))?;
+    }
+
+    jcode_logging::info(&format!(
+        "installed {} MATE launch hotkey(s) via dconf",
+        keybindings.len()
+    ));
+    Ok(changed)
+}
+
+/// All `property value` lines from XFCE's keyboard-shortcuts channel. Empty
+/// on failure (missing xfconf-query, not XFCE).
+#[cfg(target_os = "linux")]
+fn xfce_shortcut_commands_text() -> String {
+    std::process::Command::new("xfconf-query")
+        .args(["-c", "xfce4-keyboard-shortcuts", "-l", "-v"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default()
+}
+
+/// Install (or refresh) the launch hotkeys as XFCE keyboard shortcuts via
+/// xfconf-query. Stale jcode entries bound to accelerators we no longer use
+/// are removed so a re-baked chord layout never leaves orphaned bindings.
+#[cfg(target_os = "linux")]
+fn install_xfce_launch_hotkeys() -> Result<bool> {
+    let binds = write_linux_launch_scripts()?;
+
+    let mut wanted: Vec<(String, String)> = Vec::new();
+    for bind in &binds {
+        if let Some(accel) = linux_env::gnome_binding(&bind.chord) {
+            wanted.push((format!("/commands/custom/{accel}"), bind.script.clone()));
+        }
+    }
+    if wanted.is_empty() {
+        anyhow::bail!("no installable launch hotkeys for XFCE");
+    }
+
+    let existing = xfce_shortcut_commands_text();
+    let mut changed = false;
+
+    // Remove stale jcode entries bound to accelerators we no longer use.
+    for line in existing.lines() {
+        let Some((prop, value)) = line.split_once(char::is_whitespace) else {
+            continue;
+        };
+        if value.trim().contains("/launch_jcode_") && !wanted.iter().any(|(p, _)| p == prop) {
+            let _ = std::process::Command::new("xfconf-query")
+                .args(["-c", "xfce4-keyboard-shortcuts", "-p", prop, "-r"])
+                .status();
+            changed = true;
+        }
+    }
+
+    for (prop, script) in &wanted {
+        let already = existing.lines().any(|line| {
+            line.split_once(char::is_whitespace)
+                .is_some_and(|(p, v)| p == *prop && v.trim() == script)
+        });
+        if already {
+            continue;
+        }
+        let status = std::process::Command::new("xfconf-query")
+            .args([
+                "-c",
+                "xfce4-keyboard-shortcuts",
+                "-p",
+                prop,
+                "-n",
+                "-t",
+                "string",
+                "-s",
+                script,
+            ])
+            .status()
+            .context("failed to run xfconf-query (is this an XFCE session?)")?;
+        if !status.success() {
+            anyhow::bail!("xfconf-query set {prop} failed with {status}");
+        }
+        changed = true;
+    }
+
+    jcode_logging::info(&format!(
+        "installed {} XFCE launch hotkey(s) via xfconf",
+        wanted.len()
+    ));
+    Ok(changed)
+}
+
+/// Install (or refresh) the launch hotkeys as KDE global shortcuts: one hidden
+/// desktop file per hotkey plus a `_launch=` binding in `kglobalshortcutsrc`.
+/// kglobalaccel watches for desktop-file changes; a re-login may be needed on
+/// older Plasma versions.
+#[cfg(target_os = "linux")]
+fn install_kde_launch_hotkeys() -> Result<bool> {
+    let binds = write_linux_launch_scripts()?;
+    let shortcuts = linux_env::kde_shortcuts(&binds);
+    if shortcuts.is_empty() {
+        anyhow::bail!("no installable launch hotkeys for KDE");
+    }
+
+    let apps_dir = kde_applications_dir()
+        .ok_or_else(|| anyhow::anyhow!("could not locate ~/.local/share/applications"))?;
+    std::fs::create_dir_all(&apps_dir)?;
+    for sc in &shortcuts {
+        std::fs::write(apps_dir.join(&sc.desktop_file_name), &sc.desktop_file_body)?;
+    }
+
+    let rc_path = kde_globalshortcutsrc_path()
+        .ok_or_else(|| anyhow::anyhow!("could not locate kglobalshortcutsrc"))?;
+    let current = std::fs::read_to_string(&rc_path).unwrap_or_default();
+    let updated = linux_env::upsert_kde_shortcut_sections(&current, &shortcuts);
+    let changed = updated != current;
+    if changed {
+        if rc_path.exists() {
+            backup_compositor_config(&rc_path);
+        }
+        storage::write_bytes(&rc_path, updated.as_bytes())
+            .with_context(|| format!("writing {}", rc_path.display()))?;
+    }
+
+    // Nudge kglobalaccel to re-read its config. Best-effort: the shortcuts
+    // still land after the next login if the daemon isn't reachable.
+    let _ = std::process::Command::new("kquitapp6")
+        .arg("kglobalaccel")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+
+    jcode_logging::info(&format!(
+        "installed {} KDE launch hotkey(s) ({} + desktop files)",
+        shortcuts.len(),
+        rc_path.display()
+    ));
+    Ok(changed)
 }
 
 /// Write one executable launch script per resolved hotkey to
@@ -1574,13 +1940,15 @@ fn backup_compositor_config(config_path: &std::path::Path) {
 }
 
 /// Ask the compositor to reload its config so new binds take effect without a
-/// re-login. niri and Hyprland watch their config files, so only sway/i3 need
-/// an explicit IPC reload. Best-effort.
+/// re-login. niri and Hyprland watch their config files, so only sway/i3 and
+/// sxhkd need an explicit poke. Best-effort.
 #[cfg(target_os = "linux")]
 fn reload_compositor_config(comp: linux_env::LinuxCompositor) {
     let cmd: &[&str] = match comp {
         linux_env::LinuxCompositor::Sway => &["swaymsg", "reload"],
         linux_env::LinuxCompositor::I3 => &["i3-msg", "reload"],
+        // sxhkd re-reads its config on SIGUSR1.
+        linux_env::LinuxCompositor::Bspwm => &["pkill", "-USR1", "-x", "sxhkd"],
         _ => return,
     };
     match std::process::Command::new(cmd[0])
@@ -1633,17 +2001,13 @@ fn linux_launch_hotkeys_notice(state: &SetupHintsState) -> Option<StartupHints> 
     // so the user knows if they fire yet.
     let footer = if linux_hotkeys_installed(comp) {
         format!(
-            "These are bound in your {} config and fire system-wide.",
-            comp.name()
+            "These are bound via {} and fire system-wide.",
+            linux_hotkey_target_description(comp)
         )
     } else {
-        let path_display = linux_hotkey_config_path(comp)
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "its config".to_string());
         format!(
-            "Run `jcode setup-hotkey` to bind these in your {} config ({}).",
-            comp.name(),
-            path_display
+            "Run `jcode setup-hotkey` to bind these via {}.",
+            linux_hotkey_target_description(comp)
         )
     };
 
