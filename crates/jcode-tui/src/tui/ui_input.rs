@@ -50,7 +50,7 @@ pub(crate) fn composer_mode(input: &str, is_remote_mode: bool) -> ComposerMode {
     }
 }
 
-pub(crate) fn has_active_at_mention(input: &str) -> bool {
+fn has_active_at_mention(input: &str) -> bool {
     extract_at_query(input).is_some()
 }
 
