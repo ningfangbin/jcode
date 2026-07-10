@@ -201,7 +201,7 @@ fn merge_walkdir_dirs(cwd: &Path, dirs: &mut HashSet<String>) {
 /// Sync git ls-files with watchdog thread for 2s timeout.
 fn git_ls_files_sync(cwd: &Path) -> Option<(Vec<String>, HashSet<String>)> {
     let child = std::process::Command::new("git")
-        .args(["ls-files", "--cached", "--others", "--exclude-standard"])
+        .args(["ls-files", "--cached", "--others"])
         .current_dir(cwd)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -256,7 +256,7 @@ async fn collect_workspace_entries_async(cwd: &Path) -> (Vec<String>, HashSet<St
 
 async fn git_ls_files_async(cwd: &Path) -> Option<(Vec<String>, HashSet<String>)> {
     let output = tokio::process::Command::new("git")
-        .args(["ls-files", "--cached", "--others", "--exclude-standard"])
+        .args(["ls-files", "--cached", "--others"])
         .current_dir(cwd)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -337,7 +337,7 @@ fn parse_file_list<'a>(lines: impl Iterator<Item = &'a str>) -> (Vec<String>, Ha
 
     for line in lines {
         let line = line.trim();
-        if line.is_empty() {
+        if line.is_empty() || line.starts_with(".git/") {
             continue;
         }
         files.push(line.to_string());
