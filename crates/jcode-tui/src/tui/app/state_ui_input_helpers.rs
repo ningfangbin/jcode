@@ -1189,8 +1189,7 @@ impl App {
     }
 
     pub(super) fn accept_selected_command_suggestion(&mut self) -> bool {
-        let mode = crate::tui::ui::input_ui::composer_mode(&self.input, false);
-        if mode == crate::tui::ui::input_ui::ComposerMode::FileMention {
+        if crate::tui::ui::input_ui::is_file_mention_mode(&self.input) {
             return self.accept_selected_file_mention();
         }
 
@@ -1403,8 +1402,7 @@ impl App {
 
     /// Autocomplete current input - cycles through suggestions on repeated Tab
     pub fn autocomplete(&mut self) -> bool {
-        let mode = crate::tui::ui::input_ui::composer_mode(&self.input, false);
-        if mode == crate::tui::ui::input_ui::ComposerMode::FileMention {
+        if crate::tui::ui::input_ui::is_file_mention_mode(&self.input) {
             return self.autocomplete_file_mention();
         }
         self.autocomplete_slash()

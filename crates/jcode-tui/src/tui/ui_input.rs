@@ -20,7 +20,7 @@ fn shell_mode_color() -> Color {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ComposerMode {
+enum ComposerMode {
     Chat,
     SlashCommand,
     FileMention,
@@ -34,7 +34,7 @@ impl ComposerMode {
     }
 }
 
-pub(crate) fn composer_mode(input: &str, is_remote_mode: bool) -> ComposerMode {
+fn composer_mode(input: &str, is_remote_mode: bool) -> ComposerMode {
     if app::extract_input_shell_command(input).is_some() {
         if is_remote_mode {
             ComposerMode::ShellRemote
@@ -52,6 +52,12 @@ pub(crate) fn composer_mode(input: &str, is_remote_mode: bool) -> ComposerMode {
 
 fn has_active_at_mention(input: &str) -> bool {
     extract_at_query(input).is_some()
+}
+
+/// Returns true when the input contains an active `@file` mention that should
+/// trigger file-mention autocomplete instead of slash-command autocomplete.
+pub(crate) fn is_file_mention_mode(input: &str) -> bool {
+    composer_mode(input, false) == ComposerMode::FileMention
 }
 
 pub(crate) fn extract_at_query(input: &str) -> Option<(usize, String)> {
