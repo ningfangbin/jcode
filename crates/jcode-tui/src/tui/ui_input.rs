@@ -2527,69 +2527,59 @@ fn file_chip_style() -> Style {
 }
 
 /// Split segment text into chip-styled and raw spans at chip boundaries.
+/// Caller must pre-filter chips via text validation — only passing chips
+/// whose stored path still matches the current input text.
 fn segment_spans(
     text: &str,
     seg_byte_offset: usize,
     chips: &[(usize, String)],
 ) -> Vec<Span<'static>> {
-    let mut spans = Vec::new();
-    let mut pos = 0usize;
-    while pos < text.len() {
-        let abs = seg_byte_offset + pos;
+    if chips.is_empty() {
+        return vec![Span::raw(text.to_string())];
+    }
+
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut run_start: usize = 0;
+    let mut run_is_chip: Option<bool> = None;
+
+    for (byte_pos, _ch) in text.char_indices() {
+        let abs = seg_byte_offset + byte_pos;
         let in_chip = chips.iter().any(|(chip_end, path)| {
             let chip_start = chip_end.saturating_sub(path.len());
             abs >= chip_start && abs < *chip_end
         });
 
-        if in_chip {
-            // Find the end of this chip region (within this segment)
-            let mut chip_end = pos;
-            for (next_byte, _) in text[pos..].char_indices() {
-                if next_byte == 0 {
-                    continue;
-                }
-                let abs_run = seg_byte_offset + pos + next_byte;
-                if !chips.iter().any(|(chip_end, path)| {
-                    let chip_start = chip_end.saturating_sub(path.len());
-                    abs_run >= chip_start && abs_run < *chip_end
-                }) {
-                    chip_end = pos + next_byte;
-                    break;
-                }
+        match run_is_chip {
+            None => {
+                run_start = byte_pos;
+                run_is_chip = Some(in_chip);
             }
-            if chip_end == pos {
-                chip_end = text.len();
+            Some(current) if current != in_chip => {
+                spans.push(span_for_run(current, &text[run_start..byte_pos]));
+                run_start = byte_pos;
+                run_is_chip = Some(in_chip);
             }
-            spans.push(Span::styled(
-                text[pos..chip_end].to_string(),
-                file_chip_style(),
-            ));
-            pos = chip_end;
-        } else {
-            // Collect consecutive non-chip chars
-            let raw_start = pos;
-            pos = text[pos..]
-                .char_indices()
-                .skip(1)
-                .find_map(|(next_byte, _)| {
-                    let abs_run = seg_byte_offset + raw_start + next_byte;
-                    if chips.iter().any(|(chip_end, path)| {
-                        let chip_start = chip_end.saturating_sub(path.len());
-                        abs_run >= chip_start && abs_run < *chip_end
-                    }) {
-                        Some(raw_start + next_byte)
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(text.len());
-            spans.push(Span::raw(text[raw_start..pos].to_string()));
+            _ => {}
         }
     }
+
+    // Flush final run
+    if let Some(is_chip) = run_is_chip {
+        spans.push(span_for_run(is_chip, &text[run_start..]));
+    }
+
     if spans.is_empty() {
         spans.push(Span::raw(text.to_string()));
     }
     spans
+}
+
+fn span_for_run(is_chip: bool, slice: &str) -> Span<'static> {
+    if is_chip {
+        Span::styled(slice.to_string(), file_chip_style())
+    } else {
+        Span::raw(slice.to_string())
+    }
 }
 
 pub(crate) fn wrap_input_text<'a>(
@@ -2609,6 +2599,18 @@ pub(crate) fn wrap_input_text<'a>(
     let mut cursor_col = 0;
     let mut found_cursor = false;
 
+    // Filter chips: only keep those whose text still matches at the stored position
+    let valid_chips: Vec<(usize, String)> = file_chips
+        .iter()
+        .filter(|(chip_end, path)| {
+            let chip_start = chip_end.saturating_sub(path.len());
+            input
+                .get(chip_start..*chip_end)
+                .map_or(false, |txt| txt == path.as_str())
+        })
+        .cloned()
+        .collect();
+
     for (idx, segment) in wrapped_segments.iter().enumerate() {
         if !found_cursor
             && cursor_char_pos >= segment.start_char
@@ -2621,7 +2623,7 @@ pub(crate) fn wrap_input_text<'a>(
 
         let byte_start =
             crate::tui::core::char_index_to_byte_offset(input, segment.start_char);
-        let seg_spans = segment_spans(&segment.text, byte_start, file_chips);
+        let seg_spans = segment_spans(&segment.text, byte_start, &valid_chips);
 
         if idx == 0 {
             let num_color = rainbow_prompt_color(0);
