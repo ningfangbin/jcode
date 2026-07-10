@@ -55,9 +55,7 @@ impl FileMentionCache {
         let show_all = query.is_empty();
 
         for path in &self.files {
-            if !show_all
-                && crate::tui::fuzzy::fuzzy_match_positions(query, path).is_empty()
-            {
+            if !show_all && !path_matches(path, query) {
                 continue;
             }
             result.push(FileMentionCandidate {
@@ -66,7 +64,7 @@ impl FileMentionCache {
             });
         }
         for dir in &self.dirs {
-            if !show_all && crate::tui::fuzzy::fuzzy_match_positions(query, dir).is_empty() {
+            if !show_all && !path_matches(dir, query) {
                 continue;
             }
             result.push(FileMentionCandidate {
@@ -74,14 +72,14 @@ impl FileMentionCache {
                 is_directory: true,
             });
         }
+        let q = query;
         result.sort_by(|a, b| {
             if show_all {
                 a.is_directory.cmp(&b.is_directory).reverse()
                     .then_with(|| a.path.len().cmp(&b.path.len()))
             } else {
-                b.path
-                    .starts_with(query)
-                    .cmp(&a.path.starts_with(query))
+                // Primary: basename exact starts-with gets top rank
+                match_score(b, q).cmp(&match_score(a, q))
                     .then_with(|| a.is_directory.cmp(&b.is_directory).reverse())
                     .then_with(|| a.path.len().cmp(&b.path.len()))
             }
@@ -149,5 +147,50 @@ pub(crate) fn common_prefix(strings: &[&str]) -> Option<String> {
         None
     } else {
         Some(first[..end].to_string())
+    }
+}
+
+/// Check if `path` matches `query` using path-segment-aware matching.
+///
+/// Strategy (Zed-style):
+/// 1. Exact contains in full path (fastest, catches most cases)
+/// 2. Query contained in the basename portion
+/// 3. Fuzzy subsequence match over the full path
+fn path_matches(path: &str, query: &str) -> bool {
+    if path.contains(query) {
+        return true;
+    }
+    let basename = Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(path);
+    if basename.contains(query) {
+        return true;
+    }
+    !crate::tui::fuzzy::fuzzy_match_positions(query, path).is_empty()
+}
+
+/// Score how well `query` matches `path`. Higher = better.
+///
+/// Priority:
+/// 3 = basename starts with query
+/// 2 = full path starts with query
+/// 1 = basename contains query
+/// 0 = fallthrough (full path contains or fuzzy match)
+fn match_score(candidate: &FileMentionCandidate, query: &str) -> u8 {
+    let path = &candidate.path;
+    let basename = Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(path);
+
+    if basename.starts_with(query) {
+        3
+    } else if path.starts_with(query) {
+        2
+    } else if basename.contains(query) {
+        1
+    } else {
+        0
     }
 }
