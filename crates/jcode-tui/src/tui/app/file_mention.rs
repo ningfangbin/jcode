@@ -51,27 +51,42 @@ impl FileMentionCache {
         }
     }
 
-    /// Kick off an async refresh if cache is stale. Returns immediately;
-    /// candidates() will use whichever data is currently in cache.
+    /// Kick off a refresh if cache is stale.
+    /// First-ever load blocks synchronously (~50ms) so @ works immediately.
+    /// Subsequent refreshes spawn async to avoid blocking the render loop.
     pub fn refresh_if_needed(&mut self, cwd: &Path) {
-        let (should_refresh, refresh_cwd) = {
+        let (should_refresh, refresh_cwd, is_empty) = {
             let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             if inner.refreshing {
                 return;
             }
             let expired = inner.refreshed_at.elapsed().as_millis() as u64 > Self::TTL_MS;
             let dir_changed = inner.cwd != cwd;
+            let empty = inner.files.is_empty();
             if !expired && !dir_changed {
                 return;
             }
-            (true, cwd.to_path_buf())
+            (true, cwd.to_path_buf(), empty)
         };
 
         if !should_refresh {
             return;
         }
 
-        // Mark refreshing so concurrent calls don't double-spawn
+        if is_empty {
+            // First-ever load: run synchronously so @ shows results immediately.
+            // Uses sync git ls-files with 2s timeout → walkdir fallback.
+            let (files, dirs) = collect_workspace_entries_sync(&refresh_cwd);
+            let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            inner.files = files;
+            inner.dirs = dirs;
+            inner.cwd = refresh_cwd;
+            inner.refreshed_at = Instant::now();
+            inner.refreshing = false;
+            return;
+        }
+
+        // Subsequent refresh: async to not block the render loop.
         {
             let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             inner.refreshing = true;
@@ -134,6 +149,45 @@ impl FileMentionCache {
         self.last_candidates = result.clone();
         result
     }
+}
+
+/// Sync version for first-ever load. Uses std::process with timeout watchdog.
+fn collect_workspace_entries_sync(cwd: &Path) -> (Vec<String>, HashSet<String>) {
+    if let Some(result) = git_ls_files_sync(cwd) {
+        return result;
+    }
+    walkdir_fallback(cwd)
+}
+
+/// Sync git ls-files with watchdog thread for 2s timeout.
+fn git_ls_files_sync(cwd: &Path) -> Option<(Vec<String>, HashSet<String>)> {
+    let child = std::process::Command::new("git")
+        .args(["ls-files", "--cached", "--others", "--exclude-standard"])
+        .current_dir(cwd)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+
+    // Spawn a watchdog thread to kill after timeout
+    let pid = child.id();
+    std::thread::spawn(move || {
+        std::thread::sleep(FileMentionCache::GIT_TIMEOUT);
+        let _ = std::process::Command::new("kill")
+            .arg(pid.to_string())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    });
+
+    let output = child.wait_with_output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let (files, dirs) = parse_file_list(stdout.lines());
+    Some((files, dirs))
 }
 
 /// Collect workspace files and directories (async).
@@ -201,6 +255,18 @@ fn walkdir_fallback(cwd: &Path) -> (Vec<String>, HashSet<String>) {
                 continue;
             }
             if path.is_dir() {
+                // Insert the directory itself (relative to cwd)
+                if let Ok(rel) = path.strip_prefix(cwd) {
+                    if let Some(rel_str) = rel.to_str() {
+                        dirs.insert(rel_str.to_string());
+                        // Also insert all ancestors
+                        for ancestor in rel.ancestors().skip(1) {
+                            let a = ancestor.to_string_lossy();
+                            if a.is_empty() { break; }
+                            dirs.insert(a.into_owned());
+                        }
+                    }
+                }
                 stack.push(path);
                 continue;
             }
