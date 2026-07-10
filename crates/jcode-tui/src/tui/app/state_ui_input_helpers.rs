@@ -1083,7 +1083,7 @@ impl App {
         self.rank_suggestions(&prefix, self.command_candidates())
     }
 
-    pub(crate) fn file_mention_suggestions(&self, query: &str) -> Vec<(String, &'static str)> {
+    fn file_mention_suggestions(&self, query: &str) -> Vec<(String, &'static str)> {
         let cwd: &Path = self
             .session
             .working_dir

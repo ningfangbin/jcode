@@ -113,10 +113,9 @@ impl FileMentionCache {
 
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let mut result = Vec::new();
-        let show_all = query.is_empty();
 
         for path in &inner.files {
-            if !show_all && !path_matches(path, query) {
+            if !path_matches(path, query) {
                 continue;
             }
             result.push(FileMentionCandidate {
@@ -125,7 +124,7 @@ impl FileMentionCache {
             });
         }
         for dir in &inner.dirs {
-            if !show_all && !path_matches(dir, query) {
+            if !path_matches(dir, query) {
                 continue;
             }
             result.push(FileMentionCandidate {
@@ -137,14 +136,8 @@ impl FileMentionCache {
 
         let q = query;
         result.sort_by(|a, b| {
-            if show_all {
-                a.is_directory.cmp(&b.is_directory).reverse()
-                    .then_with(|| a.path.len().cmp(&b.path.len()))
-            } else {
-                match_score(b, q).cmp(&match_score(a, q))
-                    .then_with(|| a.is_directory.cmp(&b.is_directory).reverse())
-                    .then_with(|| a.path.len().cmp(&b.path.len()))
-            }
+            match_score(b, q).cmp(&match_score(a, q))
+                .then_with(|| a.path.len().cmp(&b.path.len()))
         });
         result.truncate(15);
         self.last_query = query.to_string();
@@ -165,38 +158,27 @@ fn collect_workspace_entries_sync(cwd: &Path) -> (Vec<String>, HashSet<String>) 
     walkdir_fallback(cwd)
 }
 
-/// Collect directory names from cwd sub-tree and merge into dirs.
-/// Only adds directories that don't already exist (no file list mutation).
+/// Collect top-level directory names not already covered by git ls-files
+/// ancestors. Shallow single-read_dir call, not recursive — git ls-files
+/// already covers every ancestor directory of tracked files.
 fn merge_walkdir_dirs(cwd: &Path, dirs: &mut HashSet<String>) {
-    let mut stack: Vec<PathBuf> = vec![cwd.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        for entry in entries.filter_map(|e| e.ok()) {
-            let path = entry.path();
-            let name = match path.file_name().and_then(|n| n.to_str()) {
-                Some(n) => n,
-                None => continue,
-            };
-            if name == ".git" && path.is_dir() {
-                continue;
-            }
-            if path.is_dir() {
-                if let Ok(rel) = path.strip_prefix(cwd) {
-                    if let Some(rel_str) = rel.to_str() {
-                        dirs.insert(rel_str.to_string());
-                        for ancestor in rel.ancestors().skip(1) {
-                            let a = ancestor.to_string_lossy();
-                            if a.is_empty() { break; }
-                            dirs.insert(a.into_owned());
-                        }
-                    }
-                }
-                stack.push(path);
-            }
+    let entries = match std::fs::read_dir(cwd) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
         }
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+        if name == ".git" {
+            continue;
+        }
+        dirs.insert(name.to_string());
     }
 }
 
