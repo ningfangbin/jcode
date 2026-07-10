@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -15,12 +16,20 @@ impl FileMentionCandidate {
 }
 
 pub(crate) struct FileMentionCache {
+    /// Shared cache updated by background async task.
+    inner: Arc<Mutex<FileMentionCacheInner>>,
+    /// Tracks last query to avoid recomputation.
+    last_query: String,
+    last_candidates: Vec<FileMentionCandidate>,
+}
+
+struct FileMentionCacheInner {
     files: Vec<String>,
     dirs: HashSet<String>,
     cwd: PathBuf,
     refreshed_at: Instant,
-    last_query: String,
-    last_candidates: Vec<FileMentionCandidate>,
+    /// True when a background refresh is in flight.
+    refreshing: bool,
 }
 
 impl FileMentionCache {
@@ -30,25 +39,54 @@ impl FileMentionCache {
 
     pub fn new() -> Self {
         Self {
-            files: Vec::new(),
-            dirs: HashSet::new(),
-            cwd: PathBuf::new(),
-            refreshed_at: Instant::now(),
+            inner: Arc::new(Mutex::new(FileMentionCacheInner {
+                files: Vec::new(),
+                dirs: HashSet::new(),
+                cwd: PathBuf::new(),
+                refreshed_at: Instant::now(),
+                refreshing: false,
+            })),
             last_query: String::new(),
             last_candidates: Vec::new(),
         }
     }
 
+    /// Kick off an async refresh if cache is stale. Returns immediately;
+    /// candidates() will use whichever data is currently in cache.
     pub fn refresh_if_needed(&mut self, cwd: &Path) {
-        let expired = self.refreshed_at.elapsed().as_millis() as u64 > Self::TTL_MS;
-        let dir_changed = self.cwd != cwd;
-        if expired || dir_changed {
-            self.cwd = cwd.to_path_buf();
-            self.refreshed_at = Instant::now();
-            let (files, dirs) = collect_workspace_entries(cwd);
-            self.files = files;
-            self.dirs = dirs;
+        let (should_refresh, refresh_cwd) = {
+            let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            if inner.refreshing {
+                return;
+            }
+            let expired = inner.refreshed_at.elapsed().as_millis() as u64 > Self::TTL_MS;
+            let dir_changed = inner.cwd != cwd;
+            if !expired && !dir_changed {
+                return;
+            }
+            (true, cwd.to_path_buf())
+        };
+
+        if !should_refresh {
+            return;
         }
+
+        // Mark refreshing so concurrent calls don't double-spawn
+        {
+            let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            inner.refreshing = true;
+        }
+
+        let inner_clone = Arc::clone(&self.inner);
+        tokio::task::spawn(async move {
+            let (files, dirs) = collect_workspace_entries_async(&refresh_cwd).await;
+            let mut inner = inner_clone.lock().unwrap_or_else(|e| e.into_inner());
+            inner.files = files;
+            inner.dirs = dirs;
+            inner.cwd = refresh_cwd;
+            inner.refreshed_at = Instant::now();
+            inner.refreshing = false;
+        });
     }
 
     pub fn candidates(&mut self, query: &str) -> Vec<FileMentionCandidate> {
@@ -56,10 +94,11 @@ impl FileMentionCache {
             return self.last_candidates.clone();
         }
 
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let mut result = Vec::new();
         let show_all = query.is_empty();
 
-        for path in &self.files {
+        for path in &inner.files {
             if !show_all && !path_matches(path, query) {
                 continue;
             }
@@ -68,7 +107,7 @@ impl FileMentionCache {
                 is_directory: false,
             });
         }
-        for dir in &self.dirs {
+        for dir in &inner.dirs {
             if !show_all && !path_matches(dir, query) {
                 continue;
             }
@@ -77,6 +116,8 @@ impl FileMentionCache {
                 is_directory: true,
             });
         }
+        drop(inner);
+
         let q = query;
         result.sort_by(|a, b| {
             if show_all {
@@ -95,42 +136,41 @@ impl FileMentionCache {
     }
 }
 
-/// Collect workspace files and directories.
+/// Collect workspace files and directories (async).
 ///
 /// Strategy:
-/// 1. `git ls-files` with 2s timeout (fastest, .gitignore-aware)
-/// 2. Recursive `std::fs::read_dir` as fallback
-fn collect_workspace_entries(cwd: &Path) -> (Vec<String>, HashSet<String>) {
-    // Strategy 1: git ls-files with timeout
-    if let Some(result) = git_ls_files_with_timeout(cwd) {
-        return result;
+/// 1. `git ls-files` via tokio::process with timeout (fastest, .gitignore-aware)
+/// 2. Recursive `std::fs::read_dir` via spawn_blocking as fallback
+async fn collect_workspace_entries_async(cwd: &Path) -> (Vec<String>, HashSet<String>) {
+    let cwd = cwd.to_path_buf();
+    // Strategy 1: git ls-files with tokio timeout
+    match tokio::time::timeout(
+        FileMentionCache::GIT_TIMEOUT,
+        git_ls_files_async(&cwd),
+    )
+    .await
+    {
+        Ok(Some(result)) => return result,
+        _ => {}
     }
-    // Strategy 2: walkdir fallback
-    walkdir_fallback(cwd)
+    // Strategy 2: walkdir fallback on blocking thread
+    let cwd2 = cwd.clone();
+    tokio::task::spawn_blocking(move || walkdir_fallback(&cwd2))
+        .await
+        .unwrap_or_default()
 }
 
-fn git_ls_files_with_timeout(cwd: &Path) -> Option<(Vec<String>, HashSet<String>)> {
-    let child = std::process::Command::new("git")
+async fn git_ls_files_async(cwd: &Path) -> Option<(Vec<String>, HashSet<String>)> {
+    let output = tokio::process::Command::new("git")
         .args(["ls-files", "--cached", "--others", "--exclude-standard"])
         .current_dir(cwd)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .spawn()
+        .kill_on_drop(true)
+        .output()
+        .await
         .ok()?;
 
-    // Spawn a watchdog thread to kill the process after timeout
-    let pid = child.id();
-    std::thread::spawn(move || {
-        std::thread::sleep(FileMentionCache::GIT_TIMEOUT);
-        // Best-effort kill; ignore errors (process may have already exited)
-        let _ = std::process::Command::new("kill")
-            .arg(pid.to_string())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
-    });
-
-    let output = child.wait_with_output().ok()?;
     if !output.status.success() {
         return None;
     }
