@@ -33,7 +33,7 @@ struct FileMentionCacheInner {
 }
 
 impl FileMentionCache {
-    const MAX_FILES: usize = 2000;
+    const MAX_FILES: usize = 5000;
     const TTL_MS: u64 = 1000;
     const GIT_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -273,16 +273,22 @@ fn walkdir_fallback(cwd: &Path) -> (Vec<String>, HashSet<String>) {
 }
 
 fn parse_file_list<'a>(lines: impl Iterator<Item = &'a str>) -> (Vec<String>, HashSet<String>) {
-    let mut files = Vec::new();
-    let mut dirs = HashSet::new();
+    // Collect all file paths (no limit yet)
+    let mut files: Vec<String> = lines
+        .filter(|line| {
+            let line = line.trim();
+            !line.is_empty() && !line.starts_with(".git/")
+        })
+        .map(|line| line.trim().to_string())
+        .collect();
 
-    for line in lines {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with(".git/") {
-            continue;
-        }
-        files.push(line.to_string());
-        // Insert all ancestor directories
+    // Sort alphabetically so truncation samples from across the repo
+    files.sort();
+    files.truncate(FileMentionCache::MAX_FILES);
+
+    // Extract ancestor directories from the truncated file list
+    let mut dirs = HashSet::new();
+    for line in &files {
         if let Some(parent) = Path::new(line).parent() {
             for ancestor in parent.ancestors() {
                 let a = ancestor.to_string_lossy();
@@ -291,9 +297,6 @@ fn parse_file_list<'a>(lines: impl Iterator<Item = &'a str>) -> (Vec<String>, Ha
                 }
                 dirs.insert(a.to_string());
             }
-        }
-        if files.len() >= FileMentionCache::MAX_FILES {
-            break;
         }
     }
     (files, dirs)
