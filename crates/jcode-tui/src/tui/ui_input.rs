@@ -23,6 +23,7 @@ fn shell_mode_color() -> Color {
 enum ComposerMode {
     Chat,
     SlashCommand,
+    FileMention,
     ShellLocal,
     ShellRemote,
 }
@@ -42,9 +43,39 @@ fn composer_mode(input: &str, is_remote_mode: bool) -> ComposerMode {
         }
     } else if input.trim_start().starts_with('/') {
         ComposerMode::SlashCommand
+    } else if has_active_at_mention(input) {
+        ComposerMode::FileMention
     } else {
         ComposerMode::Chat
     }
+}
+
+fn has_active_at_mention(input: &str) -> bool {
+    extract_at_query(input).is_some()
+}
+
+pub(crate) fn extract_at_query(input: &str) -> Option<(usize, String)> {
+    let last_at = input.rfind('@')?;
+    let after_at = &input[last_at + 1..];
+    if after_at.is_empty() || after_at.starts_with(|c: char| c.is_whitespace()) {
+        return None;
+    }
+    let query_len = after_at.chars().take_while(|c| !c.is_whitespace()).count();
+    if query_len == 0 {
+        return None;
+    }
+    let query: String = after_at.chars().take(query_len).collect();
+    Some((last_at, query))
+}
+
+pub(crate) fn replace_at_query(input: &str, new_path: &str) -> Option<(String, usize)> {
+    let (at_pos, _) = extract_at_query(input)?;
+    let before = &input[..at_pos];
+    let after = &input[at_pos + 1..];
+    let skip = after.chars().take_while(|c| !c.is_whitespace()).count();
+    let rest: String = after.chars().skip(skip).collect();
+    let new_input = format!("{}{}{}", before, new_path, rest);
+    Some((new_input, before.len() + new_path.len()))
 }
 
 fn shell_mode_hint(mode: ComposerMode) -> Option<&'static str> {
@@ -1394,6 +1425,47 @@ mod tests {
             normalize_repaint_sensitive_notice_text("all clear"),
             "all clear"
         );
+    }
+
+    #[test]
+    fn at_query_basic() {
+        assert_eq!(
+            extract_at_query("fix @src/main.rs"),
+            Some((4, "src/main.rs".into()))
+        );
+    }
+
+    #[test]
+    fn at_query_no_at() {
+        assert_eq!(extract_at_query("hello world"), None);
+    }
+
+    #[test]
+    fn at_query_space_after() {
+        assert_eq!(extract_at_query("@ src/main.rs"), None);
+    }
+
+    #[test]
+    fn at_query_multiple_ats() {
+        assert_eq!(
+            extract_at_query("fix @src/a.rs and @src/b.rs"),
+            Some((19, "src/b.rs".into()))
+        );
+    }
+
+    #[test]
+    fn replace_at_query_simple() {
+        let (result, cursor) = replace_at_query("fix @src/cli/st", "src/cli/startup.rs").unwrap();
+        assert_eq!(result, "fix src/cli/startup.rs");
+        assert_eq!(cursor, "fix src/cli/startup.rs".len());
+    }
+
+    #[test]
+    fn replace_at_query_with_trailing_text() {
+        let (result, cursor) =
+            replace_at_query("fix @src/cli/st please", "src/cli/startup.rs").unwrap();
+        assert_eq!(result, "fix src/cli/startup.rs please");
+        assert_eq!(cursor, "fix src/cli/startup.rs".len());
     }
 }
 
