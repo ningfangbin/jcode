@@ -52,8 +52,12 @@ impl FileMentionCache {
 
     pub fn candidates(&self, query: &str) -> Vec<FileMentionCandidate> {
         let mut result = Vec::new();
+        let show_all = query.is_empty();
+
         for path in &self.files {
-            if crate::tui::fuzzy::fuzzy_match_positions(query, path).is_empty() {
+            if !show_all
+                && crate::tui::fuzzy::fuzzy_match_positions(query, path).is_empty()
+            {
                 continue;
             }
             result.push(FileMentionCandidate {
@@ -62,7 +66,7 @@ impl FileMentionCache {
             });
         }
         for dir in &self.dirs {
-            if crate::tui::fuzzy::fuzzy_match_positions(query, dir).is_empty() {
+            if !show_all && crate::tui::fuzzy::fuzzy_match_positions(query, dir).is_empty() {
                 continue;
             }
             result.push(FileMentionCandidate {
@@ -71,11 +75,16 @@ impl FileMentionCache {
             });
         }
         result.sort_by(|a, b| {
-            b.path
-                .starts_with(query)
-                .cmp(&a.path.starts_with(query))
-                .then_with(|| a.is_directory.cmp(&b.is_directory).reverse())
-                .then_with(|| a.path.len().cmp(&b.path.len()))
+            if show_all {
+                a.is_directory.cmp(&b.is_directory).reverse()
+                    .then_with(|| a.path.len().cmp(&b.path.len()))
+            } else {
+                b.path
+                    .starts_with(query)
+                    .cmp(&a.path.starts_with(query))
+                    .then_with(|| a.is_directory.cmp(&b.is_directory).reverse())
+                    .then_with(|| a.path.len().cmp(&b.path.len()))
+            }
         });
         result.truncate(15);
         result

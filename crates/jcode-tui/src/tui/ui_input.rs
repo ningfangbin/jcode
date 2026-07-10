@@ -57,8 +57,12 @@ fn has_active_at_mention(input: &str) -> bool {
 pub(crate) fn extract_at_query(input: &str) -> Option<(usize, String)> {
     let last_at = input.rfind('@')?;
     let after_at = &input[last_at + 1..];
-    if after_at.is_empty() || after_at.starts_with(|c: char| c.is_whitespace()) {
+    if after_at.starts_with(|c: char| c.is_whitespace()) {
         return None;
+    }
+    // Allow empty query — bare "@" triggers show-all mode.
+    if after_at.is_empty() {
+        return Some((last_at, String::new()));
     }
     let query_len = after_at.chars().take_while(|c| !c.is_whitespace()).count();
     if query_len == 0 {
