@@ -54,21 +54,39 @@ impl FileMentionCache {
     /// Kick off an async refresh if cache is stale. Returns immediately;
     /// candidates() will use whichever data is currently in cache.
     pub fn refresh_if_needed(&mut self, cwd: &Path) {
-        let (should_refresh, refresh_cwd) = {
+        let (should_refresh, refresh_cwd, is_empty) = {
             let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             if inner.refreshing {
                 return;
             }
             let expired = inner.refreshed_at.elapsed().as_millis() as u64 > Self::TTL_MS;
             let dir_changed = inner.cwd != cwd;
+            let empty = inner.files.is_empty();
             if !expired && !dir_changed {
                 return;
             }
-            (true, cwd.to_path_buf())
+            (true, cwd.to_path_buf(), empty)
         };
 
         if !should_refresh {
             return;
+        }
+
+        // First-ever load: synchronously so @ shows results immediately.
+        // Subsequent refreshes are async to avoid blocking the render loop.
+        if is_empty {
+            if let Some((files, dirs)) = git_ls_files_sync(&refresh_cwd) {
+                let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+                inner.files = files;
+                inner.dirs = dirs;
+                inner.cwd = refresh_cwd;
+                inner.refreshed_at = Instant::now();
+                inner.refreshing = false;
+                self.last_query.clear();
+                self.last_candidates.clear();
+                return;
+            }
+            // git failed - fall through to async which uses walkdir
         }
 
         // Mark refreshing so concurrent calls don't double-spawn
@@ -162,7 +180,7 @@ async fn collect_workspace_entries_async(cwd: &Path) -> (Vec<String>, HashSet<St
 
 async fn git_ls_files_async(cwd: &Path) -> Option<(Vec<String>, HashSet<String>)> {
     let output = tokio::process::Command::new("git")
-        .args(["ls-files", "--cached", "--others", "--exclude-standard"])
+        .args(["ls-files", "--cached", "--others"])
         .current_dir(cwd)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -175,6 +193,35 @@ async fn git_ls_files_async(cwd: &Path) -> Option<(Vec<String>, HashSet<String>)
         return None;
     }
 
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let (files, dirs) = parse_file_list(stdout.lines());
+    Some((files, dirs))
+}
+
+/// Sync git ls-files with watchdog thread for 2s timeout. Used for first load.
+fn git_ls_files_sync(cwd: &Path) -> Option<(Vec<String>, HashSet<String>)> {
+    let child = std::process::Command::new("git")
+        .args(["ls-files", "--cached", "--others"])
+        .current_dir(cwd)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+
+    let pid = child.id();
+    std::thread::spawn(move || {
+        std::thread::sleep(FileMentionCache::GIT_TIMEOUT);
+        let _ = std::process::Command::new("kill")
+            .arg(pid.to_string())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    });
+
+    let output = child.wait_with_output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
     let stdout = String::from_utf8_lossy(&output.stdout);
     let (files, dirs) = parse_file_list(stdout.lines());
     Some((files, dirs))
@@ -231,7 +278,7 @@ fn parse_file_list<'a>(lines: impl Iterator<Item = &'a str>) -> (Vec<String>, Ha
 
     for line in lines {
         let line = line.trim();
-        if line.is_empty() {
+        if line.is_empty() || line.starts_with(".git/") {
             continue;
         }
         files.push(line.to_string());
