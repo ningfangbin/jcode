@@ -1090,8 +1090,11 @@ impl App {
             .as_deref()
             .map(Path::new)
             .unwrap_or_else(|| Path::new("."));
-        self.file_mention_cache.borrow_mut().refresh_if_needed(cwd);
-        let candidates = self.file_mention_cache.borrow().candidates(query);
+        let candidates = {
+            let mut cache = self.file_mention_cache.borrow_mut();
+            cache.refresh_if_needed(cwd);
+            cache.candidates(query)
+        };
         candidates
             .into_iter()
             .map(|c| {

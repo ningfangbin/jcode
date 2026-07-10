@@ -23,6 +23,9 @@ pub(crate) struct FileMentionCache {
     dirs: HashSet<String>,
     cwd: PathBuf,
     refreshed_at: Instant,
+    /// Cached last query + results to avoid recomputation on every frame.
+    last_query: String,
+    last_candidates: Vec<FileMentionCandidate>,
 }
 
 impl FileMentionCache {
@@ -35,6 +38,8 @@ impl FileMentionCache {
             dirs: HashSet::new(),
             cwd: PathBuf::new(),
             refreshed_at: Instant::now(),
+            last_query: String::new(),
+            last_candidates: Vec::new(),
         }
     }
 
@@ -50,7 +55,12 @@ impl FileMentionCache {
         }
     }
 
-    pub fn candidates(&self, query: &str) -> Vec<FileMentionCandidate> {
+    pub fn candidates(&mut self, query: &str) -> Vec<FileMentionCandidate> {
+        // Return cached results if query hasn't changed (avoids O(n) scan every frame)
+        if query == self.last_query && !self.last_candidates.is_empty() {
+            return self.last_candidates.clone();
+        }
+
         let mut result = Vec::new();
         let show_all = query.is_empty();
 
@@ -85,6 +95,8 @@ impl FileMentionCache {
             }
         });
         result.truncate(15);
+        self.last_query = query.to_string();
+        self.last_candidates = result.clone();
         result
     }
 
