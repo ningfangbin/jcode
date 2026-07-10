@@ -1492,7 +1492,7 @@ impl App {
                     let (path, _) = &base_suggestions[next];
                     let path = path.trim_end_matches('/');
                     if let Some((new_input, new_cursor)) =
-                        crate::tui::ui::input_ui::replace_at_query(&self.input, path)
+                        crate::tui::ui::input_ui::replace_at_query_keep_at(&self.input, path)
                     {
                         self.remember_input_undo_state();
                         self.input = new_input;
@@ -1511,7 +1511,7 @@ impl App {
             let common = common.trim_end_matches('/');
             if common.len() > query.len() {
                 if let Some((new_input, new_cursor)) =
-                    crate::tui::ui::input_ui::replace_at_query(&self.input, common)
+                    crate::tui::ui::input_ui::replace_at_query_keep_at(&self.input, common)
                 {
                     self.remember_input_undo_state();
                     self.input = new_input;
@@ -1528,7 +1528,7 @@ impl App {
         let (path, _) = &suggestions[0];
         let path = path.trim_end_matches('/');
         if let Some((new_input, new_cursor)) =
-            crate::tui::ui::input_ui::replace_at_query(&self.input, path)
+            crate::tui::ui::input_ui::replace_at_query_keep_at(&self.input, path)
         {
             self.remember_input_undo_state();
             self.input = new_input;

@@ -50,7 +50,7 @@ pub(crate) fn composer_mode(input: &str, is_remote_mode: bool) -> ComposerMode {
     }
 }
 
-fn has_active_at_mention(input: &str) -> bool {
+pub(crate) fn has_active_at_mention(input: &str) -> bool {
     extract_at_query(input).is_some()
 }
 
@@ -81,6 +81,15 @@ pub(crate) fn replace_at_query(input: &str, new_path: &str) -> Option<(String, u
     let new_input = format!("{}{}{}", before, new_path, rest);
     Some((new_input, before.len() + new_path.len()))
 }
+pub(crate) fn replace_at_query_keep_at(input: &str, new_path: &str) -> Option<(String, usize)> {
+    let (at_pos, query) = extract_at_query(input)?;
+    let before = &input[..at_pos];
+    let after_query = &input[at_pos + 1 + query.len()..];
+    let new_input = format!("{}@{}{}", before, new_path, after_query);
+    let new_cursor = before.len() + 1 + new_path.len();
+    Some((new_input, new_cursor))
+}
+
 
 fn shell_mode_hint(mode: ComposerMode) -> Option<&'static str> {
     match mode {
