@@ -111,6 +111,26 @@ impl FileMentionCache {
         if query == self.last_query && !self.last_candidates.is_empty() {
             return self.last_candidates.clone();
         }
+        // Incremental narrowing: if user typed more chars onto the end of the
+        // last query (common during typing), filter cached results instead of
+        // re-scanning the full file list.
+        if query.starts_with(&self.last_query)
+            && !self.last_query.is_empty()
+            && !self.last_candidates.is_empty()
+        {
+            let filtered: Vec<FileMentionCandidate> = self
+                .last_candidates
+                .iter()
+                .filter(|c| path_matches(&c.path, query))
+                .cloned()
+                .collect();
+            if !filtered.is_empty() {
+                self.last_query = query.to_string();
+                self.last_candidates = filtered.clone();
+                return filtered;
+            }
+            // Fall through to full scan — narrowing produced empty set
+        }
 
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let mut result = Vec::new();
