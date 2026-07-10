@@ -461,6 +461,13 @@ impl App {
     pub(super) fn get_suggestions_for(&self, input: &str) -> Vec<(String, &'static str)> {
         let input = input.trim_start();
 
+        // FileMention: route to file suggestions
+        if let Some((_, query)) = crate::tui::ui::input_ui::extract_at_query(input) {
+            if !input.starts_with('/') && !input.starts_with('!') {
+                return self.file_mention_suggestions(&query);
+            }
+        }
+
         // Only show suggestions when input starts with /
         if !input.starts_with('/') {
             return vec![];
@@ -1074,6 +1081,25 @@ impl App {
         }
 
         self.rank_suggestions(&prefix, self.command_candidates())
+    }
+
+    pub(crate) fn file_mention_suggestions(&self, query: &str) -> Vec<(String, &'static str)> {
+        let cwd: &Path = self
+            .session
+            .working_dir
+            .as_deref()
+            .map(Path::new)
+            .unwrap_or_else(|| Path::new("."));
+        self.file_mention_cache.borrow_mut().refresh_if_needed(cwd);
+        let candidates = self.file_mention_cache.borrow().candidates(query);
+        candidates
+            .into_iter()
+            .map(|c| {
+                let display = format!("{}{}", c.path, c.suffix());
+                let desc: &'static str = if c.is_directory { "📁" } else { "" };
+                (display, desc)
+            })
+            .collect()
     }
 
     /// Get command suggestions based on current input
