@@ -2526,6 +2526,61 @@ fn file_chip_style() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
+/// Split segment text into chip-styled and raw spans at chip boundaries.
+fn segment_spans(
+    text: &str,
+    seg_byte_offset: usize,
+    chips: &[(usize, String)],
+) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut raw_start = 0usize;
+    for (byte_pos, _) in text.char_indices() {
+        let abs = seg_byte_offset + byte_pos;
+        let in_chip = chips.iter().any(|(chip_end, path)| {
+            let chip_start = chip_end.saturating_sub(path.len());
+            abs >= chip_start && abs < *chip_end
+        });
+        if !in_chip {
+            continue;
+        }
+        // Flush preceding raw text
+        if byte_pos > raw_start {
+            spans.push(Span::raw(text[raw_start..byte_pos].to_string()));
+        }
+        // Collect consecutive chip characters
+        let mut chip_run = byte_pos;
+        while chip_run < text.len() {
+            let abs_run = seg_byte_offset + chip_run;
+            if !chips.iter().any(|(chip_end, path)| {
+                let chip_start = chip_end.saturating_sub(path.len());
+                abs_run >= chip_start && abs_run < *chip_end
+            }) {
+                break;
+            }
+            // advance one char
+            if let Some((next_byte, _)) = text[chip_run..].char_indices().nth(1) {
+                chip_run += next_byte;
+            } else {
+                chip_run = text.len();
+                break;
+            }
+        }
+        spans.push(Span::styled(
+            text[byte_pos..chip_run].to_string(),
+            file_chip_style(),
+        ));
+        raw_start = chip_run;
+    }
+    // Flush trailing raw text
+    if raw_start < text.len() {
+        spans.push(Span::raw(text[raw_start..].to_string()));
+    }
+    if spans.is_empty() {
+        spans.push(Span::raw(text.to_string()));
+    }
+    spans
+}
+
 pub(crate) fn wrap_input_text<'a>(
     input: &str,
     cursor_pos: usize,
@@ -2555,34 +2610,20 @@ pub(crate) fn wrap_input_text<'a>(
 
         let byte_start =
             crate::tui::core::char_index_to_byte_offset(input, segment.start_char);
-        let byte_end = byte_start + segment.text.len();
-        let is_chip = file_chips.iter().any(|(chip_end, path)| {
-            let chip_start = chip_end.saturating_sub(path.len());
-            // Segment overlaps with chip range AND input text still matches path
-            *chip_end > byte_start
-                && chip_start < byte_end
-                && input
-                    .get(chip_start..*chip_end)
-                    .map_or(false, |txt| txt == path.as_str())
-        });
-        let text_span = if is_chip {
-            Span::styled(format!(" {} ", segment.text.clone()), file_chip_style())
-        } else {
-            Span::raw(segment.text.clone())
-        };
+        let seg_spans = segment_spans(&segment.text, byte_start, file_chips);
 
         if idx == 0 {
             let num_color = rainbow_prompt_color(0);
-            lines.push(Line::from(vec![
+            let mut line_spans = vec![
                 Span::styled(num_str.to_string(), Style::default().fg(num_color)),
                 Span::styled(prompt_char.to_string(), Style::default().fg(caret_color)),
-                text_span,
-            ]));
+            ];
+            line_spans.extend(seg_spans);
+            lines.push(Line::from(line_spans));
         } else {
-            lines.push(Line::from(vec![
-                Span::raw(" ".repeat(prompt_len)),
-                text_span,
-            ]));
+            let mut line_spans = vec![Span::raw(" ".repeat(prompt_len))];
+            line_spans.extend(seg_spans);
+            lines.push(Line::from(line_spans));
         }
     }
 
