@@ -1382,6 +1382,8 @@ pub struct App {
     // Tab completion state: (base_input, suggestion_index)
     // base_input is the original input before cycling, suggestion_index is current position
     tab_completion_state: Option<(String, usize)>,
+    /// Byte ranges of @-file-mention paths in the input, styled as chips.
+    file_chips: Vec<(usize, usize)>,
     // Selected row in the visible command suggestion list.
     command_suggestion_selected: usize,
     // Time when app started (for startup animations)

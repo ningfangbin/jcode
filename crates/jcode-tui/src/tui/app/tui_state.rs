@@ -556,6 +556,10 @@ impl crate::tui::TuiState for App {
         self.cursor_pos
     }
 
+    fn file_chips(&self) -> &[(usize, usize)] {
+        &self.file_chips
+    }
+
     fn is_processing(&self) -> bool {
         self.is_processing || self.pending_queued_dispatch || self.split_launch_in_flight()
     }

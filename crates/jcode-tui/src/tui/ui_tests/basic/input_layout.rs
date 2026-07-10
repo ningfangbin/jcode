@@ -74,7 +74,7 @@ fn test_calculate_input_lines_zero_width() {
 #[test]
 fn test_wrap_input_text_empty() {
     let (lines, cursor_line, cursor_col) =
-        input_ui::wrap_input_text("", 0, 80, "1", "> ", user_color(), 3);
+        input_ui::wrap_input_text("", 0, 80, "1", "> ", user_color(), 3, &[]);
     assert_eq!(lines.len(), 1);
     assert_eq!(cursor_line, 0);
     assert_eq!(cursor_col, 0);
@@ -83,7 +83,7 @@ fn test_wrap_input_text_empty() {
 #[test]
 fn test_wrap_input_text_simple() {
     let (lines, cursor_line, cursor_col) =
-        input_ui::wrap_input_text("hello", 5, 80, "1", "> ", user_color(), 3);
+        input_ui::wrap_input_text("hello", 5, 80, "1", "> ", user_color(), 3, &[]);
     assert_eq!(lines.len(), 1);
     assert_eq!(cursor_line, 0);
     assert_eq!(cursor_col, 5); // cursor at end
@@ -92,7 +92,7 @@ fn test_wrap_input_text_simple() {
 #[test]
 fn test_wrap_input_text_cursor_middle() {
     let (lines, cursor_line, cursor_col) =
-        input_ui::wrap_input_text("hello world", 6, 80, "1", "> ", user_color(), 3);
+        input_ui::wrap_input_text("hello world", 6, 80, "1", "> ", user_color(), 3, &[]);
     assert_eq!(lines.len(), 1);
     assert_eq!(cursor_line, 0);
     assert_eq!(cursor_col, 6); // cursor at 'w'
@@ -102,7 +102,7 @@ fn test_wrap_input_text_cursor_middle() {
 fn test_wrap_input_text_wrapping() {
     // 10 chars with width 5 = 2 lines
     let (lines, cursor_line, cursor_col) =
-        input_ui::wrap_input_text("aaaaaaaaaa", 7, 5, "1", "> ", user_color(), 3);
+        input_ui::wrap_input_text("aaaaaaaaaa", 7, 5, "1", "> ", user_color(), 3, &[]);
     assert_eq!(lines.len(), 2);
     assert_eq!(cursor_line, 1); // second line
     assert_eq!(cursor_col, 2); // 7 - 5 = 2
@@ -111,7 +111,7 @@ fn test_wrap_input_text_wrapping() {
 #[test]
 fn test_wrap_input_text_with_newlines() {
     let (lines, cursor_line, cursor_col) =
-        input_ui::wrap_input_text("hello\nworld", 6, 80, "1", "> ", user_color(), 3);
+        input_ui::wrap_input_text("hello\nworld", 6, 80, "1", "> ", user_color(), 3, &[]);
     assert_eq!(lines.len(), 2);
     assert_eq!(cursor_line, 1); // second line (after newline)
     assert_eq!(cursor_col, 0); // at start of 'world'
@@ -121,7 +121,7 @@ fn test_wrap_input_text_with_newlines() {
 fn test_wrap_input_text_cursor_at_end_of_wrapped() {
     // 10 chars with width 5, cursor at position 10 (end)
     let (lines, cursor_line, cursor_col) =
-        input_ui::wrap_input_text("aaaaaaaaaa", 10, 5, "1", "> ", user_color(), 3);
+        input_ui::wrap_input_text("aaaaaaaaaa", 10, 5, "1", "> ", user_color(), 3, &[]);
     assert_eq!(lines.len(), 2);
     assert_eq!(cursor_line, 1);
     assert_eq!(cursor_col, 5);
@@ -132,7 +132,7 @@ fn test_wrap_input_text_many_lines() {
     // Create text that spans 15 lines when wrapped to width 10
     let text = "a".repeat(150);
     let (lines, cursor_line, cursor_col) =
-        input_ui::wrap_input_text(&text, 145, 10, "1", "> ", user_color(), 3);
+        input_ui::wrap_input_text(&text, 145, 10, "1", "> ", user_color(), 3, &[]);
     assert_eq!(lines.len(), 15);
     assert_eq!(cursor_line, 14); // last line
     assert_eq!(cursor_col, 5); // 145 % 10 = 5
@@ -141,7 +141,7 @@ fn test_wrap_input_text_many_lines() {
 #[test]
 fn test_wrap_input_text_multiple_newlines() {
     let (lines, cursor_line, cursor_col) =
-        input_ui::wrap_input_text("a\nb\nc\nd", 6, 80, "1", "> ", user_color(), 3);
+        input_ui::wrap_input_text("a\nb\nc\nd", 6, 80, "1", "> ", user_color(), 3, &[]);
     assert_eq!(lines.len(), 4);
     assert_eq!(cursor_line, 3); // on 'd' line
     assert_eq!(cursor_col, 0);

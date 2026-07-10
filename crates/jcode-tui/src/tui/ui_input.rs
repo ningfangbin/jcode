@@ -349,6 +349,7 @@ pub(super) fn wrapped_input_line_count(
         prompt_char,
         caret_color,
         prompt_len,
+        &[],
     );
     lines.len().max(1)
 }
@@ -2081,6 +2082,7 @@ pub(super) fn draw_input(
         prompt_char,
         caret_color,
         prompt_len,
+        app.file_chips(),
     );
 
     let mut lines: Vec<Line> = Vec::new();
@@ -2517,6 +2519,12 @@ pub(crate) fn input_cursor_pos_from_screen(
     ))
 }
 
+fn file_chip_style() -> Style {
+    Style::default()
+        .fg(rgb(90, 210, 210))
+        .add_modifier(Modifier::BOLD)
+}
+
 pub(crate) fn wrap_input_text<'a>(
     input: &str,
     cursor_pos: usize,
@@ -2525,6 +2533,7 @@ pub(crate) fn wrap_input_text<'a>(
     prompt_char: &'a str,
     caret_color: Color,
     prompt_len: usize,
+    file_chips: &[(usize, usize)],
 ) -> (Vec<Line<'a>>, usize, usize) {
     let cursor_char_pos = crate::tui::core::byte_offset_to_char_index(input, cursor_pos);
     let wrapped_segments = wrap_input_segments(input, line_width);
@@ -2543,17 +2552,29 @@ pub(crate) fn wrap_input_text<'a>(
             found_cursor = true;
         }
 
+        let byte_start =
+            crate::tui::core::char_index_to_byte_offset(input, segment.start_char);
+        let byte_end = byte_start + segment.text.len();
+        let is_chip = file_chips
+            .iter()
+            .any(|(cs, ce)| *cs < byte_end && *ce > byte_start);
+        let text_span = if is_chip {
+            Span::styled(segment.text.clone(), file_chip_style())
+        } else {
+            Span::raw(segment.text.clone())
+        };
+
         if idx == 0 {
             let num_color = rainbow_prompt_color(0);
             lines.push(Line::from(vec![
                 Span::styled(num_str.to_string(), Style::default().fg(num_color)),
                 Span::styled(prompt_char.to_string(), Style::default().fg(caret_color)),
-                Span::raw(segment.text.clone()),
+                text_span,
             ]));
         } else {
             lines.push(Line::from(vec![
                 Span::raw(" ".repeat(prompt_len)),
-                Span::raw(segment.text.clone()),
+                text_span,
             ]));
         }
     }
