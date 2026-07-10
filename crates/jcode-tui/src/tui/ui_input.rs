@@ -168,8 +168,11 @@ fn command_suggestion_lines(
             } else {
                 Style::default().fg(dim_color())
             };
+            let is_folder = *desc == "📁";
             let command_style = if is_selected {
                 Style::default().fg(rgb(255, 213, 128))
+            } else if is_folder {
+                Style::default().fg(rgb(120, 180, 220))
             } else {
                 Style::default().fg(rgb(128, 203, 196))
             };
@@ -270,8 +273,8 @@ pub(super) fn input_hint_line_height(app: &dyn TuiState) -> u16 {
     let suggestions = app.command_suggestions();
     let mode = composer_mode(app.input(), app.is_remote_mode());
     let has_suggestions = !suggestions.is_empty()
-        && matches!(mode, ComposerMode::SlashCommand | ComposerMode::Chat)
-        && (matches!(mode, ComposerMode::SlashCommand) || !app.is_processing());
+        && matches!(mode, ComposerMode::SlashCommand | ComposerMode::Chat | ComposerMode::FileMention)
+        && (matches!(mode, ComposerMode::SlashCommand | ComposerMode::FileMention) || !app.is_processing());
 
     if has_suggestions {
         return command_suggestion_hint_line_count(&suggestions);
@@ -2044,8 +2047,8 @@ pub(super) fn draw_input(
     let mode = composer_mode(input_text, app.is_remote_mode());
     let suggestions = app.command_suggestions();
     let has_suggestions = !suggestions.is_empty()
-        && matches!(mode, ComposerMode::SlashCommand | ComposerMode::Chat)
-        && (matches!(mode, ComposerMode::SlashCommand) || !app.is_processing());
+        && matches!(mode, ComposerMode::SlashCommand | ComposerMode::Chat | ComposerMode::FileMention)
+        && (matches!(mode, ComposerMode::SlashCommand | ComposerMode::FileMention) || !app.is_processing());
 
     let (prompt_char, caret_color) = input_prompt(app);
     let num_str = format!("{}", next_prompt);
