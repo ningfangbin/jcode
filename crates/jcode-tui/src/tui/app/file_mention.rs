@@ -110,10 +110,14 @@ fn collect_workspace_entries(cwd: &Path) -> (Vec<String>, HashSet<String>) {
                     continue;
                 }
                 files.push(line.to_string());
+                // Insert all ancestor directories
                 if let Some(parent) = Path::new(line).parent() {
-                    let parent = parent.to_string_lossy().to_string();
-                    if !parent.is_empty() {
-                        dirs.insert(parent);
+                    for ancestor in parent.ancestors() {
+                        let a = ancestor.to_string_lossy();
+                        if a.is_empty() {
+                            break;
+                        }
+                        dirs.insert(a.into_owned());
                     }
                 }
                 if files.len() >= FileMentionCache::MAX_FILES {
