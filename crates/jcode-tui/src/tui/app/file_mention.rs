@@ -75,7 +75,6 @@ impl FileMentionCache {
 
         if is_empty {
             // First-ever load: run synchronously so @ shows results immediately.
-            // Uses sync git ls-files with 2s timeout → walkdir fallback.
             let (files, dirs) = collect_workspace_entries_sync(&refresh_cwd);
             let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             inner.files = files;
@@ -83,6 +82,9 @@ impl FileMentionCache {
             inner.cwd = refresh_cwd;
             inner.refreshed_at = Instant::now();
             inner.refreshing = false;
+            // Invalidate query cache so next candidates() call recomputes
+            self.last_query.clear();
+            self.last_candidates.clear();
             return;
         }
 
@@ -512,5 +514,21 @@ mod tests {
     fn common_prefix_no_common() {
         let s: Vec<&str> = vec!["abc", "xyz"];
         assert_eq!(common_prefix(&s), None);
+    }
+
+    /// Full-pipeline test: refresh cache from real cwd, verify @lib.rs works.
+    #[test]
+    fn candidates_matches_real_files_by_basename() {
+        let cwd = std::env::current_dir().unwrap();
+        let mut cache = FileMentionCache::new();
+        cache.refresh_if_needed(&cwd);
+        let results = cache.candidates("lib.rs");
+        // Must find src/lib.rs — the jcode repo root contains this file
+        let paths: Vec<&str> = results.iter().map(|c| c.path.as_str()).collect();
+        assert!(
+            paths.iter().any(|p| p.ends_with("lib.rs")),
+            "src/lib.rs should match 'lib.rs'. Got: {:?}",
+            paths
+        );
     }
 }
