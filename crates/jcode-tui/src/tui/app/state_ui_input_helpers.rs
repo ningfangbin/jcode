@@ -1397,6 +1397,14 @@ impl App {
 
     /// Autocomplete current input - cycles through suggestions on repeated Tab
     pub fn autocomplete(&mut self) -> bool {
+        let mode = crate::tui::ui::input_ui::composer_mode(&self.input, false);
+        if mode == crate::tui::ui::input_ui::ComposerMode::FileMention {
+            return self.autocomplete_file_mention();
+        }
+        self.autocomplete_slash()
+    }
+
+    fn autocomplete_slash(&mut self) -> bool {
         // Get suggestions for current input
         let current_suggestions = self.get_suggestions_for(&self.input);
 
@@ -1454,6 +1462,83 @@ impl App {
         self.tab_completion_state = Some((base, selected));
         self.command_suggestion_selected = 0;
         true
+    }
+
+    fn autocomplete_file_mention(&mut self) -> bool {
+        let (_, query) = match crate::tui::ui::input_ui::extract_at_query(&self.input) {
+            Some(q) => q,
+            None => return false,
+        };
+
+        let suggestions = self.file_mention_suggestions(&query);
+        if suggestions.is_empty() {
+            self.tab_completion_state = None;
+            return false;
+        }
+
+        // Check tab cycle
+        if let Some((ref base, idx)) = self.tab_completion_state.clone() {
+            if let Some((_, base_query)) = crate::tui::ui::input_ui::extract_at_query(base) {
+                let base_suggestions = self.file_mention_suggestions(&base_query);
+                let current_path = crate::tui::ui::input_ui::extract_at_query(&self.input)
+                    .map(|(_, q)| q)
+                    .unwrap_or_default();
+                if base_suggestions.len() > 1
+                    && base_suggestions.iter().any(|(cmd, _)| {
+                        cmd.contains(&current_path) || current_path.contains(cmd)
+                    })
+                {
+                    let next = (idx + 1) % base_suggestions.len();
+                    let (path, _) = &base_suggestions[next];
+                    let path = path.trim_end_matches('/');
+                    if let Some((new_input, new_cursor)) =
+                        crate::tui::ui::input_ui::replace_at_query(&self.input, path)
+                    {
+                        self.remember_input_undo_state();
+                        self.input = new_input;
+                        self.cursor_pos = new_cursor;
+                        self.tab_completion_state = Some((base.clone(), next));
+                        self.command_suggestion_selected = next;
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // Common prefix completion
+        let paths: Vec<&str> = suggestions.iter().map(|(s, _)| s.as_str()).collect();
+        if let Some(common) = crate::tui::app::file_mention::common_prefix(&paths) {
+            let common = common.trim_end_matches('/');
+            if common.len() > query.len() {
+                if let Some((new_input, new_cursor)) =
+                    crate::tui::ui::input_ui::replace_at_query(&self.input, common)
+                {
+                    self.remember_input_undo_state();
+                    self.input = new_input;
+                    self.cursor_pos = new_cursor;
+                    self.tab_completion_state = None;
+                    self.command_suggestion_selected = 0;
+                    return true;
+                }
+            }
+        }
+
+        // Cycle with first candidate
+        let base = self.input.clone();
+        let (path, _) = &suggestions[0];
+        let path = path.trim_end_matches('/');
+        if let Some((new_input, new_cursor)) =
+            crate::tui::ui::input_ui::replace_at_query(&self.input, path)
+        {
+            self.remember_input_undo_state();
+            self.input = new_input;
+            self.cursor_pos = new_cursor;
+            self.tab_completion_state = Some((base, 0));
+            self.command_suggestion_selected = 0;
+            return true;
+        }
+
+        false
     }
 
     /// Reset tab completion state (call when user types/modifies input)
