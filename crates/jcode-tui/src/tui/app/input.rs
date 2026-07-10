@@ -1951,15 +1951,44 @@ pub(super) fn handle_enter(app: &mut App) -> bool {
     true
 }
 
+/// If cursor is at the end of a file chip, return the byte position of the
+/// chip start so Backspace deletes the entire path at once. Otherwise None.
+pub(crate) fn file_chip_backspace_start(input: &str, cursor: usize, chips: &[(usize, String)]) -> Option<usize> {
+    chips.iter().find_map(|(end, path)| {
+        if *end == cursor && cursor >= path.len()
+            && input.get(cursor - path.len()..*end).map_or(false, |s| s == path.as_str())
+        {
+            Some(cursor - path.len())
+        } else {
+            None
+        }
+    })
+}
+
+/// If cursor is at the start of a file chip, return the byte position of the
+/// chip end so Delete removes the entire path at once. Otherwise None.
+pub(crate) fn file_chip_delete_end(input: &str, cursor: usize, chips: &[(usize, String)]) -> Option<usize> {
+    chips.iter().find_map(|(end, path)| {
+        let start = end.saturating_sub(path.len());
+        if cursor == start && input.get(start..*end).map_or(false, |s| s == path.as_str()) {
+            Some(*end)
+        } else {
+            None
+        }
+    })
+}
+
 pub(super) fn handle_basic_key(app: &mut App, code: KeyCode) -> bool {
     match code {
         KeyCode::Char(c) => handle_text_input(app, &c.to_string()),
         KeyCode::Backspace => {
             if app.cursor_pos > 0 {
                 let prev = crate::tui::core::prev_char_boundary(&app.input, app.cursor_pos);
+                let drain_start = file_chip_backspace_start(&app.input, app.cursor_pos, &app.file_chips)
+                    .unwrap_or(prev);
                 app.remember_input_undo_state();
-                app.input.drain(prev..app.cursor_pos);
-                app.cursor_pos = prev;
+                app.input.drain(drain_start..app.cursor_pos);
+                app.cursor_pos = drain_start;
                 app.reset_tab_completion();
                 app.sync_model_picker_preview_from_input();
             }
@@ -1968,8 +1997,10 @@ pub(super) fn handle_basic_key(app: &mut App, code: KeyCode) -> bool {
         KeyCode::Delete => {
             if app.cursor_pos < app.input.len() {
                 let next = crate::tui::core::next_char_boundary(&app.input, app.cursor_pos);
+                let drain_end = file_chip_delete_end(&app.input, app.cursor_pos, &app.file_chips)
+                    .unwrap_or(next);
                 app.remember_input_undo_state();
-                app.input.drain(app.cursor_pos..next);
+                app.input.drain(app.cursor_pos..drain_end);
                 app.reset_tab_completion();
                 app.sync_model_picker_preview_from_input();
             }
