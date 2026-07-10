@@ -18,9 +18,9 @@ impl FileMentionCandidate {
 pub(crate) struct FileMentionCache {
     /// Shared cache updated by background async task.
     inner: Arc<Mutex<FileMentionCacheInner>>,
-    /// Tracks last query to avoid recomputation.
-    last_query: String,
-    last_candidates: Vec<FileMentionCandidate>,
+    /// Multi-level prefix cache: each entry is (query, candidates) for a
+    /// successively longer query. Used for instant backspace restore.
+    history: Vec<(String, Vec<FileMentionCandidate>)>,
 }
 
 struct FileMentionCacheInner {
@@ -46,8 +46,7 @@ impl FileMentionCache {
                 refreshed_at: Instant::now(),
                 refreshing: false,
             })),
-            last_query: String::new(),
-            last_candidates: Vec::new(),
+            history: Vec::new(),
         }
     }
 
@@ -82,8 +81,7 @@ impl FileMentionCache {
                 inner.cwd = refresh_cwd;
                 inner.refreshed_at = Instant::now();
                 inner.refreshing = false;
-                self.last_query.clear();
-                self.last_candidates.clear();
+                self.history.clear();
                 return;
             }
             // git failed - fall through to async which uses walkdir
@@ -108,30 +106,59 @@ impl FileMentionCache {
     }
 
     pub fn candidates(&mut self, query: &str) -> Vec<FileMentionCandidate> {
-        if query == self.last_query && !self.last_candidates.is_empty() {
-            return self.last_candidates.clone();
-        }
-        // Incremental narrowing: if user typed more chars onto the end of the
-        // last query (common during typing), filter cached results instead of
-        // re-scanning the full file list.
-        if query.starts_with(&self.last_query)
-            && !self.last_query.is_empty()
-            && !self.last_candidates.is_empty()
-        {
-            let filtered: Vec<FileMentionCandidate> = self
-                .last_candidates
-                .iter()
-                .filter(|c| path_matches(&c.path, query))
-                .cloned()
-                .collect();
-            if !filtered.is_empty() {
-                self.last_query = query.to_string();
-                self.last_candidates = filtered.clone();
-                return filtered;
+        // Exact match — last entry in history
+        if let Some((last_query, last_candidates)) = self.history.last() {
+            if query == last_query && !last_candidates.is_empty() {
+                return last_candidates.clone();
             }
-            // Fall through to full scan — narrowing produced empty set
         }
 
+        // Narrowing: user typed more chars → filter from last history entry
+        if let Some((last_query, last_candidates)) = self.history.last() {
+            if query.starts_with(last_query.as_str())
+                && !last_query.is_empty()
+                && !last_candidates.is_empty()
+            {
+                let filtered: Vec<FileMentionCandidate> = last_candidates
+                    .iter()
+                    .filter(|c| path_matches(&c.path, query))
+                    .cloned()
+                    .collect();
+                if !filtered.is_empty() {
+                    self.history.push((query.to_string(), filtered.clone()));
+                    return filtered;
+                }
+                // Narrowing to empty — fall through to full scan
+            }
+        }
+
+        // Broadening (backspace/delete): user removed chars — pop history to
+        // the deepest entry whose query IS a prefix of the current query.
+        // Then narrow down from there (incremental filter from the cached set).
+        while self.history.len() > 1 {
+            let parent_idx = self.history.len() - 2;
+            let (parent_query, _) = &self.history[parent_idx];
+            if parent_query.len() <= query.len() && query.starts_with(parent_query.as_str()) {
+                self.history.truncate(parent_idx + 1);
+                // Narrow down from parent to current query via incremental filter
+                let (base_query, base_candidates) = self.history.last().unwrap();
+                if query.len() > base_query.len() {
+                    let filtered: Vec<FileMentionCandidate> = base_candidates
+                        .iter()
+                        .filter(|c| path_matches(&c.path, query))
+                        .cloned()
+                        .collect();
+                    if !filtered.is_empty() {
+                        self.history.push((query.to_string(), filtered.clone()));
+                        return filtered;
+                    }
+                }
+                break;
+            }
+            self.history.truncate(parent_idx + 1);
+        }
+
+        // Full scan
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let mut result = Vec::new();
         let show_all = query.is_empty();
@@ -168,8 +195,8 @@ impl FileMentionCache {
             }
         });
         result.truncate(15);
-        self.last_query = query.to_string();
-        self.last_candidates = result.clone();
+        self.history.clear();
+        self.history.push((query.to_string(), result.clone()));
         result
     }
 }
