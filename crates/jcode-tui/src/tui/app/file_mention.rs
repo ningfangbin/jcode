@@ -153,10 +153,49 @@ impl FileMentionCache {
 
 /// Sync version for first-ever load. Uses std::process with timeout watchdog.
 fn collect_workspace_entries_sync(cwd: &Path) -> (Vec<String>, HashSet<String>) {
-    if let Some(result) = git_ls_files_sync(cwd) {
-        return result;
+    if let Some((files, mut dirs)) = git_ls_files_sync(cwd) {
+        // git ls-files covers files but not empty directories or
+        // directories containing only gitignored files. Merge in
+        // directory names from a fast top-level walk.
+        merge_walkdir_dirs(cwd, &mut dirs);
+        return (files, dirs);
     }
     walkdir_fallback(cwd)
+}
+
+/// Collect directory names from cwd sub-tree and merge into dirs.
+/// Only adds directories that don't already exist (no file list mutation).
+fn merge_walkdir_dirs(cwd: &Path, dirs: &mut HashSet<String>) {
+    let mut stack: Vec<PathBuf> = vec![cwd.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            let name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n,
+                None => continue,
+            };
+            if name == ".git" && path.is_dir() {
+                continue;
+            }
+            if path.is_dir() {
+                if let Ok(rel) = path.strip_prefix(cwd) {
+                    if let Some(rel_str) = rel.to_str() {
+                        dirs.insert(rel_str.to_string());
+                        for ancestor in rel.ancestors().skip(1) {
+                            let a = ancestor.to_string_lossy();
+                            if a.is_empty() { break; }
+                            dirs.insert(a.into_owned());
+                        }
+                    }
+                }
+                stack.push(path);
+            }
+        }
+    }
 }
 
 /// Sync git ls-files with watchdog thread for 2s timeout.
@@ -198,14 +237,15 @@ fn git_ls_files_sync(cwd: &Path) -> Option<(Vec<String>, HashSet<String>)> {
 async fn collect_workspace_entries_async(cwd: &Path) -> (Vec<String>, HashSet<String>) {
     let cwd = cwd.to_path_buf();
     // Strategy 1: git ls-files with tokio timeout
-    match tokio::time::timeout(
+    if let Ok(Some((files, mut dirs))) = tokio::time::timeout(
         FileMentionCache::GIT_TIMEOUT,
         git_ls_files_async(&cwd),
     )
     .await
     {
-        Ok(Some(result)) => return result,
-        _ => {}
+        // Merge in directory names from filesystem walk (sync, fast)
+        merge_walkdir_dirs(&cwd, &mut dirs);
+        return (files, dirs);
     }
     // Strategy 2: walkdir fallback on blocking thread
     let cwd2 = cwd.clone();
