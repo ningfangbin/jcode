@@ -958,6 +958,7 @@ pub(super) fn clear_input_for_escape(app: &mut App) {
         app.remember_input_undo_state();
     }
     app.input.clear();
+    app.file_chips.clear();
     app.cursor_pos = 0;
     app.reset_tab_completion();
     app.sync_model_picker_preview_from_input();
@@ -3006,6 +3007,7 @@ impl App {
         }
 
         let raw_input = std::mem::take(&mut self.input);
+        self.file_chips.clear();
         let input = self.expand_paste_placeholders(&raw_input);
         if let Some(notice) = input_exceeds_submit_limit(&input) {
             self.input = raw_input;

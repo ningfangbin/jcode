@@ -2566,7 +2566,7 @@ pub(crate) fn wrap_input_text<'a>(
                     .map_or(false, |txt| txt == path.as_str())
         });
         let text_span = if is_chip {
-            Span::styled(segment.text.clone(), file_chip_style())
+            Span::styled(format!(" {} ", segment.text.clone()), file_chip_style())
         } else {
             Span::raw(segment.text.clone())
         };
