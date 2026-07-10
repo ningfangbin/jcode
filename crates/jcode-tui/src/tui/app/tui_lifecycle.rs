@@ -684,6 +684,7 @@ impl App {
             productivity_refreshing: false,
             last_overnight_card_refresh: None,
             workspace_client: crate::tui::workspace_client::WorkspaceClientState::default(),
+            file_mention_cache: RefCell::new(file_mention::FileMentionCache::new()),
         };
 
         for notice in app.provider.drain_startup_notices() {
@@ -1096,6 +1097,7 @@ impl App {
             productivity_refreshing: false,
             last_overnight_card_refresh: None,
             workspace_client: crate::tui::workspace_client::WorkspaceClientState::default(),
+            file_mention_cache: RefCell::new(file_mention::FileMentionCache::new()),
         };
 
         for notice in app.provider.drain_startup_notices() {

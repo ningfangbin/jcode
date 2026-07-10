@@ -62,6 +62,7 @@ mod copy_selection;
 mod debug;
 mod dictation;
 mod event_wrappers;
+mod file_mention;
 mod handterm_native_scroll;
 pub(crate) mod helpers;
 mod hotkey_feedback;
@@ -1473,6 +1474,7 @@ pub struct App {
     /// Per-client Niri-style workspace navigation state. Previously a process
     /// global; now owned per App instance.
     workspace_client: super::workspace_client::WorkspaceClientState,
+    file_mention_cache: RefCell<file_mention::FileMentionCache>,
 }
 
 /// Inert provider used by runtime modes whose output is supplied by another source.
