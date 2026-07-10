@@ -2533,47 +2533,58 @@ fn segment_spans(
     chips: &[(usize, String)],
 ) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
-    let mut raw_start = 0usize;
-    for (byte_pos, _) in text.char_indices() {
-        let abs = seg_byte_offset + byte_pos;
+    let mut pos = 0usize;
+    while pos < text.len() {
+        let abs = seg_byte_offset + pos;
         let in_chip = chips.iter().any(|(chip_end, path)| {
             let chip_start = chip_end.saturating_sub(path.len());
             abs >= chip_start && abs < *chip_end
         });
-        if !in_chip {
-            continue;
-        }
-        // Flush preceding raw text
-        if byte_pos > raw_start {
-            spans.push(Span::raw(text[raw_start..byte_pos].to_string()));
-        }
-        // Collect consecutive chip characters
-        let mut chip_run = byte_pos;
-        while chip_run < text.len() {
-            let abs_run = seg_byte_offset + chip_run;
-            if !chips.iter().any(|(chip_end, path)| {
-                let chip_start = chip_end.saturating_sub(path.len());
-                abs_run >= chip_start && abs_run < *chip_end
-            }) {
-                break;
+
+        if in_chip {
+            // Find the end of this chip region (within this segment)
+            let mut chip_end = pos;
+            for (next_byte, _) in text[pos..].char_indices() {
+                if next_byte == 0 {
+                    continue;
+                }
+                let abs_run = seg_byte_offset + pos + next_byte;
+                if !chips.iter().any(|(chip_end, path)| {
+                    let chip_start = chip_end.saturating_sub(path.len());
+                    abs_run >= chip_start && abs_run < *chip_end
+                }) {
+                    chip_end = pos + next_byte;
+                    break;
+                }
             }
-            // advance one char
-            if let Some((next_byte, _)) = text[chip_run..].char_indices().nth(1) {
-                chip_run += next_byte;
-            } else {
-                chip_run = text.len();
-                break;
+            if chip_end == pos {
+                chip_end = text.len();
             }
+            spans.push(Span::styled(
+                text[pos..chip_end].to_string(),
+                file_chip_style(),
+            ));
+            pos = chip_end;
+        } else {
+            // Collect consecutive non-chip chars
+            let raw_start = pos;
+            pos = text[pos..]
+                .char_indices()
+                .skip(1)
+                .find_map(|(next_byte, _)| {
+                    let abs_run = seg_byte_offset + raw_start + next_byte;
+                    if chips.iter().any(|(chip_end, path)| {
+                        let chip_start = chip_end.saturating_sub(path.len());
+                        abs_run >= chip_start && abs_run < *chip_end
+                    }) {
+                        Some(raw_start + next_byte)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(text.len());
+            spans.push(Span::raw(text[raw_start..pos].to_string()));
         }
-        spans.push(Span::styled(
-            text[byte_pos..chip_run].to_string(),
-            file_chip_style(),
-        ));
-        raw_start = chip_run;
-    }
-    // Flush trailing raw text
-    if raw_start < text.len() {
-        spans.push(Span::raw(text[raw_start..].to_string()));
     }
     if spans.is_empty() {
         spans.push(Span::raw(text.to_string()));
