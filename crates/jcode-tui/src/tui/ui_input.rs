@@ -2521,7 +2521,8 @@ pub(crate) fn input_cursor_pos_from_screen(
 
 fn file_chip_style() -> Style {
     Style::default()
-        .fg(rgb(90, 210, 210))
+        .fg(rgb(20, 60, 80))
+        .bg(rgb(90, 210, 210))
         .add_modifier(Modifier::BOLD)
 }
 
@@ -2533,7 +2534,7 @@ pub(crate) fn wrap_input_text<'a>(
     prompt_char: &'a str,
     caret_color: Color,
     prompt_len: usize,
-    file_chips: &[(usize, usize)],
+    file_chips: &[(usize, String)],
 ) -> (Vec<Line<'a>>, usize, usize) {
     let cursor_char_pos = crate::tui::core::byte_offset_to_char_index(input, cursor_pos);
     let wrapped_segments = wrap_input_segments(input, line_width);
@@ -2555,9 +2556,15 @@ pub(crate) fn wrap_input_text<'a>(
         let byte_start =
             crate::tui::core::char_index_to_byte_offset(input, segment.start_char);
         let byte_end = byte_start + segment.text.len();
-        let is_chip = file_chips
-            .iter()
-            .any(|(cs, ce)| *cs < byte_end && *ce > byte_start);
+        let is_chip = file_chips.iter().any(|(chip_end, path)| {
+            let chip_start = chip_end.saturating_sub(path.len());
+            // Segment overlaps with chip range AND input text still matches path
+            *chip_end > byte_start
+                && chip_start < byte_end
+                && input
+                    .get(chip_start..*chip_end)
+                    .map_or(false, |txt| txt == path.as_str())
+        });
         let text_span = if is_chip {
             Span::styled(segment.text.clone(), file_chip_style())
         } else {

@@ -1220,9 +1220,9 @@ impl App {
         if let Some((new_input, new_cursor)) =
             crate::tui::ui::input_ui::replace_at_query(&self.input, path)
         {
-            // Record the byte range of the inserted path as a file chip
-            let start = new_cursor.saturating_sub(path.len());
-            self.file_chips.push((start, new_cursor));
+            // Record the file chip: (end_byte, path_text) validated per-frame
+            self.file_chips
+                .push((new_cursor, path.to_string()));
             self.remember_input_undo_state();
             self.input = new_input;
             self.cursor_pos = new_cursor;
@@ -1551,7 +1551,6 @@ impl App {
     pub fn reset_tab_completion(&mut self) {
         self.tab_completion_state = None;
         self.command_suggestion_selected = 0;
-        self.file_chips.clear();
     }
 
     pub(super) fn remember_input_undo_state(&mut self) {

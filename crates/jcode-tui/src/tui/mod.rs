@@ -190,7 +190,7 @@ pub trait TuiState {
     // ---- Input ----
     fn input(&self) -> &str;
     fn cursor_pos(&self) -> usize;
-    fn file_chips(&self) -> &[(usize, usize)] { &[] }
+    fn file_chips(&self) -> &[(usize, String)] { &[] }
     fn is_processing(&self) -> bool;
     fn queued_messages(&self) -> &[String];
     fn interleave_message(&self) -> Option<&str>;

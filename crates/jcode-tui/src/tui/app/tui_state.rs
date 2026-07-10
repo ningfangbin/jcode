@@ -556,7 +556,7 @@ impl crate::tui::TuiState for App {
         self.cursor_pos
     }
 
-    fn file_chips(&self) -> &[(usize, usize)] {
+    fn file_chips(&self) -> &[(usize, String)] {
         &self.file_chips
     }
 
