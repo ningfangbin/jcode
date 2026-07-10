@@ -1186,6 +1186,11 @@ impl App {
     }
 
     pub(super) fn accept_selected_command_suggestion(&mut self) -> bool {
+        let mode = crate::tui::ui::input_ui::composer_mode(&self.input, false);
+        if mode == crate::tui::ui::input_ui::ComposerMode::FileMention {
+            return self.accept_selected_file_mention();
+        }
+
         let suggestions = self.clamp_command_suggestion_selection();
         let Some((cmd, _)) = suggestions.get(self.command_suggestion_selected).cloned() else {
             return false;
@@ -1201,6 +1206,25 @@ impl App {
         self.command_suggestion_selected = 0;
         self.sync_model_picker_preview_from_input();
         true
+    }
+
+    fn accept_selected_file_mention(&mut self) -> bool {
+        let suggestions = self.clamp_command_suggestion_selection();
+        let Some((selected, _)) = suggestions.get(self.command_suggestion_selected).cloned() else {
+            return false;
+        };
+        let path = selected.trim_end_matches('/');
+        if let Some((new_input, new_cursor)) =
+            crate::tui::ui::input_ui::replace_at_query(&self.input, path)
+        {
+            self.remember_input_undo_state();
+            self.input = new_input;
+            self.cursor_pos = new_cursor;
+            self.command_suggestion_selected = 0;
+            self.tab_completion_state = None;
+            return true;
+        }
+        false
     }
 
     /// Whether to show the dedicated first-run onboarding welcome screen
