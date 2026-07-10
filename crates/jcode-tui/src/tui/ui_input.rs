@@ -1452,7 +1452,7 @@ mod tests {
     fn at_query_multiple_ats() {
         assert_eq!(
             extract_at_query("fix @src/a.rs and @src/b.rs"),
-            Some((19, "src/b.rs".into()))
+            Some((18, "src/b.rs".into()))
         );
     }
 
