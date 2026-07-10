@@ -115,7 +115,7 @@ fn collect_workspace_entries(cwd: &Path) -> (Vec<String>, HashSet<String>) {
                 if let Some(parent) = Path::new(line).parent() {
                     let parent = parent.to_string_lossy().to_string();
                     if !parent.is_empty() {
-                        dirs.insert(format!("{}/", parent));
+                        dirs.insert(parent);
                     }
                 }
                 if files.len() >= FileMentionCache::MAX_FILES {
