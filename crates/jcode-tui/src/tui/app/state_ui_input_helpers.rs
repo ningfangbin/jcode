@@ -1491,7 +1491,8 @@ impl App {
                     .unwrap_or_default();
                 if base_suggestions.len() > 1
                     && base_suggestions.iter().any(|(cmd, _)| {
-                        cmd.contains(&current_path) || current_path.contains(cmd)
+                        let p = cmd.trim_end_matches('/');
+                        p == current_path || current_path == p
                     })
                 {
                     let next = (idx + 1) % base_suggestions.len();
@@ -1572,6 +1573,7 @@ impl App {
         if let Some((input, cursor_pos)) = self.input_undo_stack.pop() {
             self.input = input;
             self.cursor_pos = cursor_pos.min(self.input.len());
+            self.file_chips.clear();
             self.reset_tab_completion();
             self.sync_model_picker_preview_from_input();
             self.set_status_notice("↶ Input restored");

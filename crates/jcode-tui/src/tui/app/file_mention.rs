@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FileMentionCandidate {
@@ -10,11 +10,7 @@ pub(crate) struct FileMentionCandidate {
 
 impl FileMentionCandidate {
     pub fn suffix(&self) -> &'static str {
-        if self.is_directory {
-            "/"
-        } else {
-            ""
-        }
+        if self.is_directory { "/" } else { "" }
     }
 }
 
@@ -23,7 +19,6 @@ pub(crate) struct FileMentionCache {
     dirs: HashSet<String>,
     cwd: PathBuf,
     refreshed_at: Instant,
-    /// Cached last query + results to avoid recomputation on every frame.
     last_query: String,
     last_candidates: Vec<FileMentionCandidate>,
 }
@@ -31,6 +26,7 @@ pub(crate) struct FileMentionCache {
 impl FileMentionCache {
     const MAX_FILES: usize = 2000;
     const TTL_MS: u64 = 1000;
+    const GIT_TIMEOUT: Duration = Duration::from_secs(2);
 
     pub fn new() -> Self {
         Self {
@@ -56,7 +52,6 @@ impl FileMentionCache {
     }
 
     pub fn candidates(&mut self, query: &str) -> Vec<FileMentionCandidate> {
-        // Return cached results if query hasn't changed (avoids O(n) scan every frame)
         if query == self.last_query && !self.last_candidates.is_empty() {
             return self.last_candidates.clone();
         }
@@ -88,7 +83,6 @@ impl FileMentionCache {
                 a.is_directory.cmp(&b.is_directory).reverse()
                     .then_with(|| a.path.len().cmp(&b.path.len()))
             } else {
-                // Primary: basename exact starts-with gets top rank
                 match_score(b, q).cmp(&match_score(a, q))
                     .then_with(|| a.is_directory.cmp(&b.is_directory).reverse())
                     .then_with(|| a.path.len().cmp(&b.path.len()))
@@ -99,43 +93,120 @@ impl FileMentionCache {
         self.last_candidates = result.clone();
         result
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.files.is_empty() && self.dirs.is_empty()
-    }
 }
 
+/// Collect workspace files and directories.
+///
+/// Strategy:
+/// 1. `git ls-files` with 2s timeout (fastest, .gitignore-aware)
+/// 2. Recursive `std::fs::read_dir` as fallback
 fn collect_workspace_entries(cwd: &Path) -> (Vec<String>, HashSet<String>) {
+    // Strategy 1: git ls-files with timeout
+    if let Some(result) = git_ls_files_with_timeout(cwd) {
+        return result;
+    }
+    // Strategy 2: walkdir fallback
+    walkdir_fallback(cwd)
+}
+
+fn git_ls_files_with_timeout(cwd: &Path) -> Option<(Vec<String>, HashSet<String>)> {
+    let child = std::process::Command::new("git")
+        .args(["ls-files", "--cached", "--others", "--exclude-standard"])
+        .current_dir(cwd)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+
+    // Spawn a watchdog thread to kill the process after timeout
+    let pid = child.id();
+    std::thread::spawn(move || {
+        std::thread::sleep(FileMentionCache::GIT_TIMEOUT);
+        // Best-effort kill; ignore errors (process may have already exited)
+        let _ = std::process::Command::new("kill")
+            .arg(pid.to_string())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    });
+
+    let output = child.wait_with_output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let (files, dirs) = parse_file_list(stdout.lines());
+    Some((files, dirs))
+}
+
+fn walkdir_fallback(cwd: &Path) -> (Vec<String>, HashSet<String>) {
     let mut files = Vec::new();
     let mut dirs = HashSet::new();
 
-    let output = std::process::Command::new("git")
-        .args(["ls-files", "--cached", "--others", "--exclude-standard"])
-        .current_dir(cwd)
-        .output();
-    if let Ok(output) = output {
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines() {
-                let line = line.trim();
-                if line.is_empty() || line.starts_with('.') {
-                    continue;
-                }
-                files.push(line.to_string());
-                // Insert all ancestor directories
-                if let Some(parent) = Path::new(line).parent() {
-                    for ancestor in parent.ancestors() {
+    let mut stack: Vec<PathBuf> = vec![cwd.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            let name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n,
+                None => continue,
+            };
+            // Skip .git directory
+            if name == ".git" && path.is_dir() {
+                continue;
+            }
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if let Ok(rel) = path.strip_prefix(cwd) {
+                if let Some(rel_str) = rel.to_str() {
+                    files.push(rel_str.to_string());
+                    // Insert all ancestor directories
+                    for ancestor in rel.parent().into_iter().flat_map(|p| p.ancestors()) {
                         let a = ancestor.to_string_lossy();
                         if a.is_empty() {
                             break;
                         }
-                        dirs.insert(a.into_owned());
+                        dirs.insert(a.to_string());
+                    }
+                    if files.len() >= FileMentionCache::MAX_FILES {
+                        return (files, dirs);
                     }
                 }
-                if files.len() >= FileMentionCache::MAX_FILES {
+            }
+        }
+    }
+    (files, dirs)
+}
+
+fn parse_file_list<'a>(lines: impl Iterator<Item = &'a str>) -> (Vec<String>, HashSet<String>) {
+    let mut files = Vec::new();
+    let mut dirs = HashSet::new();
+
+    for line in lines {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        files.push(line.to_string());
+        // Insert all ancestor directories
+        if let Some(parent) = Path::new(line).parent() {
+            for ancestor in parent.ancestors() {
+                let a = ancestor.to_string_lossy();
+                if a.is_empty() {
                     break;
                 }
+                dirs.insert(a.to_string());
             }
+        }
+        if files.len() >= FileMentionCache::MAX_FILES {
+            break;
         }
     }
     (files, dirs)
@@ -159,19 +230,9 @@ pub(crate) fn common_prefix(strings: &[&str]) -> Option<String> {
             return None;
         }
     }
-    if end == 0 {
-        None
-    } else {
-        Some(first[..end].to_string())
-    }
+    if end == 0 { None } else { Some(first[..end].to_string()) }
 }
 
-/// Check if `path` matches `query` using path-segment-aware matching.
-///
-/// Strategy (Zed-style):
-/// 1. Exact contains in full path (fastest, catches most cases)
-/// 2. Query contained in the basename portion
-/// 3. Fuzzy subsequence match over the full path
 fn path_matches(path: &str, query: &str) -> bool {
     if path.contains(query) {
         return true;
@@ -186,13 +247,6 @@ fn path_matches(path: &str, query: &str) -> bool {
     !crate::tui::fuzzy::fuzzy_match_positions(query, path).is_empty()
 }
 
-/// Score how well `query` matches `path`. Higher = better.
-///
-/// Priority:
-/// 3 = basename starts with query
-/// 2 = full path starts with query
-/// 1 = basename contains query
-/// 0 = fallthrough (full path contains or fuzzy match)
 fn match_score(candidate: &FileMentionCandidate, query: &str) -> u8 {
     let path = &candidate.path;
     let basename = Path::new(path)
@@ -208,5 +262,109 @@ fn match_score(candidate: &FileMentionCandidate, query: &str) -> u8 {
         1
     } else {
         0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn path_matches_basename() {
+        assert!(path_matches("src/lib.rs", "lib.rs"));
+        assert!(path_matches("crates/jcode-tui/src/main.rs", "main.rs"));
+    }
+
+    #[test]
+    fn path_matches_full_path() {
+        assert!(path_matches("src/cli/args.rs", "src/cli"));
+        assert!(path_matches("crates/jcode-tui/src/app.rs", "jcode-tui"));
+    }
+
+    #[test]
+    fn path_matches_fuzzy() {
+        // fuzzy.rs matches subsequences: "s" "c" "l" "i" found in "src/cli/...up.rs"
+        assert!(path_matches("src/cli/startup.rs", "scli"));
+        // "strup" subsequence in "startup"
+        assert!(path_matches("src/cli/startup.rs", "strup"));
+    }
+
+    #[test]
+    fn path_matches_no_match() {
+        assert!(!path_matches("src/lib.rs", "xyz"));
+        assert!(!path_matches("src/main.rs", "lib"));
+    }
+
+    #[test]
+    fn match_score_basename_prefix_wins() {
+        let c = FileMentionCandidate { path: "deep/nested/src/lib.rs".into(), is_directory: false };
+        assert_eq!(match_score(&c, "lib"), 3);
+        assert_eq!(match_score(&c, "lib.rs"), 3);
+    }
+
+    #[test]
+    fn match_score_path_prefix() {
+        let c = FileMentionCandidate { path: "src/cli/args.rs".into(), is_directory: false };
+        assert_eq!(match_score(&c, "src/cli"), 2);
+    }
+
+    #[test]
+    fn match_score_basename_contains() {
+        let c = FileMentionCandidate { path: "src/cli/startup.rs".into(), is_directory: false };
+        assert_eq!(match_score(&c, "tart"), 1);
+    }
+
+    #[test]
+    fn match_score_fallback() {
+        let c = FileMentionCandidate { path: "src/cli/args.rs".into(), is_directory: false };
+        // "rs" appears in basename "args.rs" — score 1
+        assert_eq!(match_score(&c, "rs"), 1);
+        // "xyz" not in basename nor path prefix — score 0
+        assert_eq!(match_score(&c, "xyz"), 0);
+    }
+
+    #[test]
+    fn parse_file_list_includes_dotfiles() {
+        let input = ".envrc\n.env.example\nsrc/main.rs\n";
+        let (files, dirs) = parse_file_list(input.lines());
+        assert!(files.contains(&".envrc".to_string()));
+        assert!(files.contains(&".env.example".to_string()));
+        assert!(files.contains(&"src/main.rs".to_string()));
+        assert!(dirs.contains("src"));
+    }
+
+    #[test]
+    fn parse_file_list_skips_empty_lines() {
+        let input = "src/main.rs\n\n\nsrc/lib.rs\n";
+        let (files, _) = parse_file_list(input.lines());
+        assert_eq!(files.len(), 2);
+    }
+
+    #[test]
+    fn parse_file_list_ancestor_dirs() {
+        let input = "crates/jcode-tui/src/lib.rs\n";
+        let (files, dirs) = parse_file_list(input.lines());
+        assert_eq!(files.len(), 1);
+        assert!(dirs.contains("crates/jcode-tui/src"));
+        assert!(dirs.contains("crates/jcode-tui"));
+        assert!(dirs.contains("crates"));
+    }
+
+    #[test]
+    fn common_prefix_basic() {
+        let s: Vec<&str> = vec!["src/cli/args.rs", "src/cli/startup.rs"];
+        assert_eq!(common_prefix(&s).unwrap(), "src/cli/");
+    }
+
+    #[test]
+    fn common_prefix_single_char() {
+        let s: Vec<&str> = vec!["abc", "abd", "abe"];
+        assert_eq!(common_prefix(&s).unwrap(), "ab");
+    }
+
+    #[test]
+    fn common_prefix_no_common() {
+        let s: Vec<&str> = vec!["abc", "xyz"];
+        assert_eq!(common_prefix(&s), None);
     }
 }
