@@ -23,6 +23,7 @@ fn shell_mode_color() -> Color {
 enum ComposerMode {
     Chat,
     SlashCommand,
+    FileMention,
     ShellLocal,
     ShellRemote,
 }
@@ -42,6 +43,8 @@ fn composer_mode(input: &str, is_remote_mode: bool) -> ComposerMode {
         }
     } else if input.trim_start().starts_with('/') {
         ComposerMode::SlashCommand
+    } else if has_active_at_mention(input) {
+        ComposerMode::FileMention
     } else {
         ComposerMode::Chat
     }
@@ -53,6 +56,91 @@ fn shell_mode_hint(mode: ComposerMode) -> Option<&'static str> {
         ComposerMode::ShellRemote => Some("  shell mode · Enter runs on server"),
         _ => None,
     }
+}
+
+// ── @file 语法解析 ───────────────────────────────────────────────
+
+/// 检测输入中是否有活动的 @ 引用。
+///
+/// 规则（对标 Zed `MentionCompletion::try_parse`）：
+///   1. 从右向左查找 `@`
+///   2. `@` 左边必须是：行首、空白符、或 `(` `[` `{`
+///   3. `@` 右边不能紧跟空白符
+pub(crate) fn has_active_at_mention(input: &str) -> bool {
+    extract_at_query(input).is_some()
+}
+
+/// 提取 @ 查询内容。返回 `(at_sign_byte_offset, query_string)`。
+///
+/// 示例:
+///   "帮我看看 @main.rs"     → Some((12, "main.rs"))
+///   "帮我看看 @"           → Some((12, ""))
+///   "帮我看看 @ main.rs"   → None  (@ 后紧跟空格)
+///   "test@main.rs"         → None  (@ 不在边界)
+pub(crate) fn extract_at_query(input: &str) -> Option<(usize, String)> {
+    let last_at = input
+        .rmatch_indices('@')
+        .find(|(idx, _)| {
+            // @ 后不能紧跟空白
+            if input[*idx + 1..].starts_with(|c: char| c.is_whitespace()) {
+                return false;
+            }
+            // @ 前必须是行首、空格、或开括号
+            if *idx > 0 {
+                let prev = input[..*idx].chars().last().unwrap();
+                prev.is_whitespace() || matches!(prev, '(' | '[' | '{')
+            } else {
+                true
+            }
+        })?;
+    let (pos, _) = last_at;
+
+    let after_at = &input[pos + 1..];
+    if after_at.is_empty() {
+        return Some((pos, String::new()));
+    }
+
+    let query_len = after_at
+        .chars()
+        .take_while(|c| !c.is_whitespace())
+        .count();
+    if query_len == 0 {
+        return None;
+    }
+
+    let query: String = after_at.chars().take(query_len).collect();
+    Some((pos, query))
+}
+
+/// 替换 @query 为选中的路径（去掉 @）。
+pub(crate) fn replace_at_query(input: &str, new_path: &str) -> Option<(String, usize)> {
+    let (at_pos, _query) = extract_at_query(input)?;
+    let before = &input[..at_pos];
+    let after = &input[at_pos + 1..];
+    let skip = after
+        .chars()
+        .take_while(|c| !c.is_whitespace())
+        .count();
+    let rest: String = after.chars().skip(skip).collect();
+    let new_input = format!("{}{}{}", before, new_path, rest);
+    Some((new_input, before.len() + new_path.len()))
+}
+
+/// 替换 @query 为选中的路径（保留 @，Tab 补全过程用）。
+pub(crate) fn replace_at_query_keep_at(
+    input: &str,
+    new_path: &str,
+) -> Option<(String, usize)> {
+    let (at_pos, _query) = extract_at_query(input)?;
+    let before = &input[..at_pos];
+    let after = &input[at_pos + 1..];
+    let skip = after
+        .chars()
+        .take_while(|c| !c.is_whitespace())
+        .count();
+    let rest: String = after.chars().skip(skip).collect();
+    let new_input = format!("{}@{}{}", before, new_path, rest);
+    Some((new_input, before.len() + 1 + new_path.len()))
 }
 
 fn normalize_repaint_sensitive_notice_text(text: &str) -> String {
