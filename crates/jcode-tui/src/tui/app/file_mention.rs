@@ -20,7 +20,7 @@ use tokio::sync::RwLock;
 
 /// A single file (or directory) entry in the file index.
 #[derive(Clone, Debug)]
-pub(crate) struct FileEntry {
+struct FileEntry {
     /// Relative path from workspace root, e.g. "src/cli/startup.rs".
     pub path: Arc<str>,
     /// Just the filename portion, e.g. "startup.rs".
@@ -42,7 +42,7 @@ pub(crate) struct FileEntry {
 ///
 /// Entries from both layers are chained together in `search_in_index`.
 #[derive(Clone, Debug)]
-pub(crate) struct PathIndex {
+struct PathIndex {
     /// Base entries from git ls-files (excludes gitignored paths).
     pub entries: Vec<FileEntry>,
     /// Lazy entries from on-demand `read_dir` of ignored directories.
@@ -103,12 +103,12 @@ struct HistoryEntry {
 /// Capacity is capped at `max_entries` (default 20). When the user makes a
 /// "jump edit" (e.g. deleting a middle character) the prefix invariant is
 /// violated and the entire history is cleared.
-pub(crate) struct SearchHistory {
+struct SearchHistory {
     entries: Vec<HistoryEntry>,
     max_entries: usize,
 }
 
-pub(crate) enum LookupResult {
+enum LookupResult {
     /// Cache hit — return these results immediately.
     Hit(Vec<FileMatch>),
     /// Cache miss — caller must perform a full search.
@@ -333,7 +333,7 @@ fn show_all_files(
 ///
 /// Merges both `entries` (git ls-files) and `lazy_entries` (on-demand
 /// ignored-directory scan) so that `@ai-memory/` finds gitignored files.
-pub(crate) fn search_in_index(
+fn search_in_index(
     query: &str,
     index: &PathIndex,
     recent_files: &[Arc<str>],
@@ -564,7 +564,7 @@ async fn build_path_index(cwd: &Path) -> PathIndex {
 ///
 /// **Important**: This *must* use `tokio::sync::RwLock`, not
 /// `std::sync::RwLock`. The latter does not support `.write().await`.
-pub(crate) struct FileIndexManager {
+struct FileIndexManager {
     current: Arc<RwLock<Arc<PathIndex>>>,
     cwd: PathBuf,
     refreshing: Arc<AtomicBool>,

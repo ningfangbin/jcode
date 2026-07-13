@@ -1917,7 +1917,7 @@ fn compact_suggestion_text(text: &str, max_chars: usize) -> String {
 // ── FileMention helpers ────────────────────────────────────────────
 
 /// Longest common prefix of a list of strings.
-pub(crate) fn common_prefix(strings: &[&str]) -> Option<String> {
+fn common_prefix(strings: &[&str]) -> Option<String> {
     let first = strings.first()?;
     let mut end = first.len();
     for s in strings.iter().skip(1) {
@@ -1935,7 +1935,7 @@ pub(crate) fn common_prefix(strings: &[&str]) -> Option<String> {
 }
 
 /// Resolve a relative or absolute path into an absolute `PathBuf`.
-pub(crate) fn resolve_path(path: &str, cwd: Option<&Path>) -> PathBuf {
+fn resolve_path(path: &str, cwd: Option<&Path>) -> PathBuf {
     let p = Path::new(path);
     if p.is_absolute() {
         return p.to_path_buf();

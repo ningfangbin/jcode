@@ -34,7 +34,7 @@ impl ComposerMode {
     }
 }
 
-pub(crate) fn composer_mode(input: &str, is_remote_mode: bool) -> ComposerMode {
+fn composer_mode(input: &str, is_remote_mode: bool) -> ComposerMode {
     if app::extract_input_shell_command(input).is_some() {
         if is_remote_mode {
             ComposerMode::ShellRemote
