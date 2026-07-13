@@ -1114,6 +1114,25 @@ fn try_scan_ignored_dir(dir_path: &str, index: &mut PathIndex) {
 
     let abs_dir = index.root.join(dir_path);
     if !abs_dir.is_dir() {
+        // Prefix fallback: when the query is a root-level name and the
+        // exact directory does not exist, scan the workspace root for
+        // directory names that start with `dir_path` (e.g. "ai" →
+        // "ai-memory/").  This is how users discover gitignored
+        // directories without typing their full name.
+        if !dir_path.contains('/') {
+            if let Ok(rd) = std::fs::read_dir(&index.root) {
+                for entry in rd.filter_map(|e| e.ok()) {
+                    if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
+                        let name = entry.file_name();
+                        let name_str = name.to_string_lossy();
+                        if name_str.starts_with(dir_path) && !name_str.starts_with('.') {
+                            // Recursively scan the matched directory.
+                            try_scan_ignored_dir(&name_str, index);
+                        }
+                    }
+                }
+            }
+        }
         return;
     }
 
