@@ -25,6 +25,9 @@ struct FileEntry {
     /// Just the filename portion, e.g. "startup.rs".
     pub filename: Arc<str>,
     pub is_directory: bool,
+    /// Extension-based heuristic: false when the extension is in TEXT_EXTENSIONS,
+    /// true otherwise. Refined during actual file read (null-byte scan).
+    pub is_likely_binary: bool,
     pub char_bag: CharBag,
 }
 
@@ -77,6 +80,8 @@ pub(crate) struct FileMatch {
     pub is_directory: bool,
     /// `true` when this file was recently opened by the user.
     pub is_recent: bool,
+    /// `true` when the extension is not in the known text whitelist.
+    pub is_likely_binary: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -230,6 +235,21 @@ impl SearchHistory {
 /// Maximum number of results returned to the UI.
 const MAX_RESULTS: usize = 15;
 
+/// Return `true` when a directory path matches the user's query at a
+/// path-segment boundary.
+///
+/// Examples for query "src":
+///   "src/"           → starts_with("src")     → true
+///   "crates/jcode-tui/src/" → contains("/src") → true
+///   "scripts/"       → neither                 → false
+fn dir_matches_query(query: &str, dir_path: &str) -> bool {
+    if dir_path.starts_with(query) {
+        return true;
+    }
+    let segment = format!("/{}", query);
+    dir_path.contains(&segment)
+}
+
 /// Lightweight path-match used by the history cache (faster than match_entry).
 fn matches_filter(path: &str, query: &str) -> bool {
     if path.contains(query) {
@@ -300,26 +320,42 @@ fn show_all_files(
                 path: entry.path.clone(),
                 is_directory: false,
                 is_recent: true,
+                is_likely_binary: entry.is_likely_binary,
             })
         })
         .collect();
 
-    // Also include root-level files from both base and lazy entries.
+    // Root-level entries: directories first, then visible files, skip hidden.
+    // This matches Zed's behavior where @ shows recent files + the top-level
+    // directory structure rather than every loose file.
+    let mut root_dirs: Vec<FileMatch> = Vec::new();
+    let mut root_files: Vec<FileMatch> = Vec::new();
     for entry in index.entries.iter().chain(index.lazy_entries.iter()) {
-        if results.len() >= max_results {
-            break;
-        }
         let is_root_level = !entry.path.contains('/') && !entry.path.contains('\\');
-        if is_root_level && !results.iter().any(|r| r.path == entry.path) {
-            results.push(FileMatch {
+        if !is_root_level || results.iter().any(|r| r.path == entry.path) {
+            continue;
+        }
+        if entry.is_directory {
+            root_dirs.push(FileMatch {
+                score: 30.0,
+                path: entry.path.clone(),
+                is_directory: true,
+                is_recent: false,
+                is_likely_binary: false,
+            });
+        } else if !entry.path.starts_with('.') {
+            root_files.push(FileMatch {
                 score: 0.0,
                 path: entry.path.clone(),
-                is_directory: entry.is_directory,
+                is_directory: false,
                 is_recent: false,
+                is_likely_binary: entry.is_likely_binary,
             });
         }
     }
-
+    results.extend(root_dirs);
+    results.extend(root_files);
+    results.truncate(max_results);
     results
 }
 
@@ -355,14 +391,15 @@ fn search_in_index(
                 path: entry.path.clone(),
                 is_directory: entry.is_directory,
                 is_recent,
+                is_likely_binary: entry.is_likely_binary,
             });
         }
     }
 
     // Inject directory entries so users can navigate into subdirectories
-    // by selecting them (e.g. @src shows "src/" as first suggestion).
+    // by selecting them (e.g. @src shows "src/" and "crates/jcode-tui/src/"
+    // as top suggestions, regardless of which worktree subtree they sit in).
     if !query.is_empty() {
-        let query_clean = query_lower.trim_end_matches('/');
         // Collect unique ancestor directories from matching results.
         let mut new_dirs: Vec<FileMatch> = Vec::new();
         let mut seen: HashSet<Arc<str>> = HashSet::new();
@@ -374,7 +411,7 @@ fn search_in_index(
             let mut remaining = full;
             while let Some(slash) = remaining.rfind('/') {
                 let ancestor = &full[..slash + 1];
-                if !ancestor.starts_with(query_clean) {
+                if !dir_matches_query(&query_lower, ancestor) {
                     break;
                 }
                 let key: Arc<str> = Arc::from(ancestor);
@@ -385,6 +422,7 @@ fn search_in_index(
                         path: key,
                         is_directory: true,
                         is_recent: false,
+                        is_likely_binary: false,
                     });
                 }
                 remaining = &full[..slash];
@@ -546,6 +584,11 @@ async fn build_path_index(cwd: &Path) -> PathIndex {
             path: Arc::from(path_str.as_str()),
             filename,
             is_directory: false,
+            is_likely_binary: p
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|ext| !TEXT_EXTENSIONS.contains(&ext))
+                .unwrap_or(true),
             char_bag: CharBag::from(path_str),
         };
 
@@ -787,6 +830,11 @@ fn try_scan_ignored_dir(dir_path: &str, index: &mut PathIndex) {
                             path: Arc::from(rel_str),
                             filename,
                             is_directory: abs_path.is_dir(),
+                            is_likely_binary: abs_path
+                                .extension()
+                                .and_then(|e| e.to_str())
+                                .map(|ext| !TEXT_EXTENSIONS.contains(&ext))
+                                .unwrap_or(!abs_path.is_dir()),
                             char_bag: CharBag::from(rel_str),
                         });
                     }
@@ -925,6 +973,7 @@ mod tests {
             path: Arc::from(path),
             filename,
             is_directory: false,
+            is_likely_binary: false,
             char_bag: CharBag::from(path),
         }
     }
@@ -935,6 +984,7 @@ mod tests {
             path: Arc::from(path),
             is_directory: false,
             is_recent: false,
+            is_likely_binary: false,
         }
     }
 
