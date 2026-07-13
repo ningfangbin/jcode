@@ -571,18 +571,34 @@ fn search_in_index(
         }
     }
 
-    // Stable sort: score descending, then shorter paths first, then
-    // path ascending.  This ensures directories (score 110) appear
-    // before files (score ≤100), and within the same score tier,
-    // shorter paths rank higher.
+    // Sort: score descending, then shorter paths first, then path ascending.
     results.sort_by(|a, b| {
         b.score
             .total_cmp(&a.score)
             .then_with(|| a.path.len().cmp(&b.path.len()))
             .then_with(|| a.path.cmp(&b.path))
     });
-    results.truncate(MAX_RESULTS);
-    results
+
+    // Ensure a mix of directories and files.  Directories are useful for
+    // navigation, but files are what the user ultimately wants.  Keep at most
+    // 4 directory entries so files from deep inside the target directory
+    // still appear even when many ancestor directories match.
+    let mut final_results = Vec::with_capacity(MAX_RESULTS);
+    let mut dirs_seen = 0usize;
+    const MAX_DIRS: usize = 4;
+    for r in results {
+        if r.is_directory {
+            if dirs_seen >= MAX_DIRS {
+                continue;
+            }
+            dirs_seen += 1;
+        }
+        final_results.push(r);
+        if final_results.len() >= MAX_RESULTS {
+            break;
+        }
+    }
+    final_results
 }
 
 // ---------------------------------------------------------------------------
