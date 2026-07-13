@@ -2139,13 +2139,11 @@ pub(super) fn file_chip_backspace_start(input: &str, cursor: usize, chips: &[Pat
             return Some(*start);
         }
     }
-    // Priority 2: cursor at/past chip end.
+    // Priority 2: cursor exactly at chip end → delete entire chip.
     spans
         .iter()
-        .filter(|(_, end)| *end <= cursor)
-        .map(|(start, end)| {
-            if *end == cursor { *start } else { *end }
-        })
+        .filter(|(_, end)| *end == cursor)
+        .map(|(start, _)| *start)
         .max_by_key(|start| cursor - start)
 }
 
@@ -2155,16 +2153,9 @@ pub(super) fn file_chip_delete_end(input: &str, cursor: usize, chips: &[PathBuf]
     let spans = file_chip_spans(input, chips);
     spans
         .iter()
-        .filter(|(start, _)| *start >= cursor)
-        .map(|(start, end)| {
-            if *start == cursor {
-                *end
-            } else {
-                // Cursor before chip → delete text between cursor and chip-start.
-                *start
-            }
-        })
-        .min_by_key(|end| end - cursor) // closest to cursor wins
+        .filter(|(start, _)| *start == cursor)
+        .map(|(_, end)| *end)
+        .max_by_key(|end| end - cursor) // longest match wins
 }
 
 pub(super) fn handle_basic_key(app: &mut App, code: KeyCode) -> bool {
@@ -3786,19 +3777,25 @@ mod chip_deletion_tests {
         let chips = [PathBuf::from("src/main.rs")];
         // "help " (5) + "src/main.rs" (11) + "测试" (6) = 22 bytes
         let input = "help src/main.rs\u{6d4b}\u{8bd5}";
-        let cursor = input.len();  // 22
+        let cursor = input.len(); // 22
         let start = file_chip_backspace_start(input, cursor, &chips);
-        // Chip span is (5, 16). Cursor at 22. Priority 2: end(16) != cursor(22)
-        // → return end = 16. So drain 16..22 = "测试" deleted.
-        assert_eq!(start, Some(16), "1st BS deletes suffix: chip_end={}, cursor={}", 16, cursor);
-        
+        // Cursor past chip end → None (fallback to single-char deletion).
+        assert_eq!(start, None, "cursor past chip → normal single-char backspace");
+
+        // Simulate single-char backspaces one at a time.
         let mut s = String::from(input);
-        s.drain(start.unwrap()..cursor);
+        // 1st BS: prev_char_boundary from 22 → 19 (first byte of 试)
+        let prev = crate::tui::core::prev_char_boundary(&s, 22);
+        s.drain(prev..s.len());
+        assert_eq!(s, "help src/main.rs\u{6d4b}");
+        // 2nd BS: prev_char_boundary from 19 → 16 (end of chip)
+        let prev = crate::tui::core::prev_char_boundary(&s, s.len());
+        s.drain(prev..s.len());
         assert_eq!(s, "help src/main.rs");
-        
-        // 2nd Backspace: cursor at chip end → delete entire chip
+
+        // Now cursor at chip end → delete entire chip.
         let start2 = file_chip_backspace_start(&s, s.len(), &chips);
-        assert_eq!(start2, Some(5), "2nd BS deletes entire chip from byte 5");
+        assert_eq!(start2, Some(5), "cursor at chip end → delete entire chip");
         s.drain(start2.unwrap()..s.len());
         assert_eq!(s, "help ");
     }
