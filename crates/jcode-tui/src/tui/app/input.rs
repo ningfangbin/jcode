@@ -3188,7 +3188,26 @@ impl App {
         // Expand @file references: read file contents into the prompt.
         if !self.file_chips.is_empty() {
             let file_chips = std::mem::take(&mut self.file_chips);
-            input = crate::tui::app::file_mention::build_prompt_with_files(&input, &file_chips);
+            // Resolve relative paths against workspace root so file reads work
+            // regardless of the process current directory.
+            let cwd: PathBuf = self
+                .session
+                .working_dir
+                .as_deref()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."));
+            let absolute_chips: Vec<PathBuf> = file_chips
+                .iter()
+                .map(|p| {
+                    if p.is_absolute() {
+                        p.clone()
+                    } else {
+                        cwd.join(p)
+                    }
+                })
+                .collect();
+            input =
+                crate::tui::app::file_mention::build_prompt_with_files(&input, &absolute_chips);
         }
 
         self.follow_chat_bottom(); // Reset to bottom and resume auto-scroll on new input

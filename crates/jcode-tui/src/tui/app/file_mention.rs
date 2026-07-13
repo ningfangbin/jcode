@@ -8,9 +8,10 @@
 
 use super::char_bag::CharBag;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------
@@ -55,6 +56,9 @@ struct PathIndex {
     pub root: PathBuf,
     /// Monotonic timestamp of last build.
     pub built_at: Instant,
+    /// Loaded .gitignore patterns for the walkdir fallback.
+    #[allow(dead_code)]
+    gitignore_patterns: Vec<GitignorePattern>,
 }
 
 impl PathIndex {
@@ -66,8 +70,117 @@ impl PathIndex {
             path_to_index: HashMap::new(),
             root,
             built_at: Instant::now(),
+            gitignore_patterns: Vec::new(),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+//  Lightweight .gitignore parser (P3-21: walkdir fallback gitignore support)
+// ---------------------------------------------------------------------------
+
+/// A single parsed .gitignore pattern.
+#[derive(Clone, Debug)]
+struct GitignorePattern {
+    /// Whether it's a negation (`!pattern`).
+    negated: bool,
+    /// Whether the pattern is anchored (starts with `/`).
+    anchored: bool,
+    /// Whether the pattern targets directories only (ends with `/`).
+    dir_only: bool,
+    /// The glob-like body after stripping `!`, `/`, trailing `/`.
+    body: String,
+}
+
+/// Parse patterns from a `.gitignore` file.
+fn load_gitignore(dir: &Path) -> Vec<GitignorePattern> {
+    let path = dir.join(".gitignore");
+    let file = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        Err(_) => return Vec::new(),
+    };
+    let reader = std::io::BufReader::new(file);
+    let mut patterns = Vec::new();
+    for line in reader.lines().map_while(Result::ok) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let mut negated = false;
+        let rest = if let Some(stripped) = trimmed.strip_prefix('!') {
+            negated = true;
+            stripped
+        } else {
+            trimmed
+        };
+        let anchored = rest.starts_with('/');
+        let body = if anchored { &rest[1..] } else { rest };
+        let dir_only = body.ends_with('/');
+        let body = if dir_only {
+            &body[..body.len() - 1]
+        } else {
+            body
+        };
+        patterns.push(GitignorePattern {
+            negated,
+            anchored,
+            dir_only,
+            body: body.to_string(),
+        });
+    }
+    patterns
+}
+
+/// Check if a relative path matches a gitignore pattern.
+fn matches_gitignore(rel_path: &str, is_dir: bool, patterns: &[GitignorePattern]) -> bool {
+    let mut ignored = false;
+    for p in patterns {
+        // Simple matching: check if path contains the pattern body as a segment.
+        let matches = if p.anchored {
+            rel_path == p.body || rel_path.starts_with(&format!("{}/", p.body))
+        } else if p.body.contains('/') {
+            // Pattern with slash: match from any directory level.
+            rel_path == p.body
+                || rel_path.ends_with(&format!("/{}", p.body))
+                || rel_path.starts_with(&format!("{}/", p.body))
+        } else {
+            // Simple name pattern: match filename or any path component.
+            if let Some(name) = Path::new(rel_path).file_name().and_then(|n| n.to_str()) {
+                glob_match_name(name, &p.body)
+            } else {
+                rel_path.contains(&p.body)
+            }
+        };
+        // Directory-only patterns only apply to directories.
+        if p.dir_only && !is_dir {
+            continue;
+        }
+        if matches {
+            ignored = !p.negated;
+        }
+    }
+    ignored
+}
+
+/// Simplified glob match for common gitignore patterns like `*.o`, `*.pyc`, `target`.
+fn glob_match_name(name: &str, pattern: &str) -> bool {
+    if pattern == name {
+        return true;
+    }
+    if let Some(ext) = pattern.strip_prefix("*.") {
+        return name.ends_with(&format!(".{}", ext));
+    }
+    if pattern.starts_with('*') && pattern.ends_with('*') {
+        let inner = &pattern[1..pattern.len() - 1];
+        return name.contains(inner);
+    }
+    if let Some(prefix) = pattern.strip_suffix('*') {
+        return name.starts_with(prefix);
+    }
+    if let Some(suffix) = pattern.strip_prefix('*') {
+        return name.ends_with(suffix);
+    }
+    false
 }
 
 /// A single file match produced by the search engine.
@@ -529,19 +642,28 @@ async fn git_ls_files(cwd: &Path) -> Option<Vec<String>> {
 
 /// Walkdir fallback when `git ls-files` is unavailable.
 ///
-/// Uses `symlink_metadata` to avoid following symlinks, and skips the
-/// directories listed in `SKIP_DIRS`.
+/// Uses `symlink_metadata` to avoid following symlinks, skips directories
+/// listed in `SKIP_DIRS`, and respects `.gitignore` patterns (P3-21).
 async fn walkdir_collect(cwd: &Path) -> Vec<String> {
     let cwd = cwd.to_path_buf();
     tokio::task::spawn_blocking(move || {
+        let gitignore = load_gitignore(&cwd);
         let mut files: Vec<String> = Vec::new();
         let mut stack: Vec<PathBuf> = vec![cwd.clone()];
+        // Track per-directory gitignore patterns.
+        let mut dir_gitignores: Vec<(PathBuf, Vec<GitignorePattern>)> = Vec::new();
 
         while let Some(dir) = stack.pop() {
             let entries = match std::fs::read_dir(&dir) {
                 Ok(e) => e,
                 Err(_) => continue,
             };
+
+            // Load .gitignore for this directory.
+            let local_patterns = load_gitignore(&dir);
+            if !local_patterns.is_empty() {
+                dir_gitignores.push((dir.clone(), local_patterns));
+            }
 
             for entry in entries.filter_map(|e| e.ok()) {
                 let path = entry.path();
@@ -551,16 +673,27 @@ async fn walkdir_collect(cwd: &Path) -> Vec<String> {
                     continue;
                 }
 
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
                 if path.is_dir() {
-                    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                     if !SKIP_DIRS.contains(&name) {
-                        stack.push(path);
+                        // Check gitignore for directory.
+                        if let Ok(rel) = path.strip_prefix(&cwd) {
+                            if let Some(rel_str) = rel.to_str() {
+                                if !matches_any_gitignore(rel_str, true, &gitignore, &dir_gitignores) {
+                                    stack.push(path);
+                                }
+                            }
+                        }
                     }
                     continue;
                 }
 
                 if let Ok(rel) = path.strip_prefix(&cwd) {
                     if let Some(rel_str) = rel.to_str() {
+                        if matches_any_gitignore(rel_str, false, &gitignore, &dir_gitignores) {
+                            continue;
+                        }
                         files.push(rel_str.to_string());
                         if files.len() >= MAX_FILES {
                             return files;
@@ -574,6 +707,30 @@ async fn walkdir_collect(cwd: &Path) -> Vec<String> {
     })
     .await
     .unwrap_or_default()
+}
+
+/// Check a relative path against root and per-directory gitignore patterns.
+fn matches_any_gitignore(
+    rel: &str,
+    is_dir: bool,
+    root_patterns: &[GitignorePattern],
+    dir_patterns: &[(PathBuf, Vec<GitignorePattern>)],
+) -> bool {
+    if matches_gitignore(rel, is_dir, root_patterns) {
+        return true;
+    }
+    for (dir, patterns) in dir_patterns {
+        // Only apply if the path is under this directory.
+        if rel.starts_with(&format!("{}/", dir.display()))
+            || rel == dir.to_string_lossy().as_ref()
+        {
+            let sub_path = rel.strip_prefix(&format!("{}/", dir.display())).unwrap_or(rel);
+            if matches_gitignore(sub_path, is_dir, patterns) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Build a fresh `PathIndex` for the workspace.
@@ -620,6 +777,7 @@ async fn build_path_index(cwd: &Path) -> PathIndex {
         path_to_index,
         root: cwd.to_path_buf(),
         built_at: Instant::now(),
+        gitignore_patterns: Vec::new(),
     }
 }
 
@@ -644,15 +802,73 @@ struct FileIndexManager {
     current: Arc<RwLock<Arc<PathIndex>>>,
     cwd: PathBuf,
     refreshing: Arc<AtomicBool>,
+    /// Flag set by the background file watcher (notify) when FS changes occur.
+    /// Checked in `check_refresh` to trigger re-index without TTL polling.
+    dirty: Arc<AtomicBool>,
+    /// Holds the notify watcher thread alive. Dropping this stops watching.
+    #[allow(dead_code)]
+    _watcher_handle: Arc<Mutex<Option<notify::INotifyWatcher>>>,
 }
 
 impl FileIndexManager {
     pub fn new(cwd: PathBuf) -> Self {
+        let dirty = Arc::new(AtomicBool::new(false));
+        let watcher = Self::start_watcher(cwd.clone(), dirty.clone());
+
         Self {
             current: Arc::new(RwLock::new(Arc::new(PathIndex::empty(cwd.clone())))),
             cwd,
             refreshing: Arc::new(AtomicBool::new(false)),
+            dirty,
+            _watcher_handle: Arc::new(Mutex::new(watcher)),
         }
+    }
+
+    /// Spawn a background thread that watches `cwd` for filesystem changes
+    /// and sets the `dirty` flag. Returns the watcher handle.
+    fn start_watcher(cwd: PathBuf, dirty: Arc<AtomicBool>) -> Option<notify::INotifyWatcher> {
+        use notify::{Event, EventKind, RecursiveMode, Watcher};
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut watcher = notify::INotifyWatcher::new(
+            move |res: Result<Event, notify::Error>| {
+                if let Ok(event) = res {
+                    // Ignore access-only events; only care about creates, modifies,
+                    // deletes, and renames.
+                    match event.kind {
+                        EventKind::Create(_)
+                        | EventKind::Modify(_)
+                        | EventKind::Remove(_)
+                        | EventKind::Any => {}
+                        _ => return,
+                    }
+                    let _ = tx.send(());
+                }
+            },
+            notify::Config::default(),
+        )
+        .ok()?;
+
+        let _ = watcher.watch(&cwd, RecursiveMode::NonRecursive);
+        // The watcher must not be dropped — keep it alive in this thread or leak
+        // it to be cleaned up when the process exits.
+        std::mem::forget(watcher);
+
+        // Drain events; set dirty on any relevant filesystem change.
+        // Debounce: only set dirty at most once per second.
+        std::thread::spawn(move || {
+            let mut last_set = std::time::Instant::now()
+                .checked_sub(Duration::from_secs(2))
+                .unwrap();
+            for _ in rx {
+                let now = std::time::Instant::now();
+                if now.duration_since(last_set) >= Duration::from_secs(1) {
+                    dirty.store(true, Ordering::Release);
+                    last_set = now;
+                }
+            }
+        });
+
+        None // handle is null; thread owns the real watcher
     }
 
     /// Obtain a lightweight snapshot of the current index.
@@ -779,7 +995,13 @@ impl FileMentionCache {
         }
 
         let index = self.index_manager.snapshot();
+
+        // Check dirty flag from file watcher (P2-16 notify integration).
+        // If the watcher detected changes, re-index regardless of TTL.
+        let dirty = self.index_manager.dirty.swap(false, Ordering::Acquire);
+
         let needs_refresh = index.entries.is_empty()
+            || dirty
             || index.built_at.elapsed() > Duration::from_secs(30);
 
         if needs_refresh && !self.index_manager.is_refreshing() {
@@ -1074,6 +1296,7 @@ mod tests {
             path_to_index: HashMap::new(),
             root: PathBuf::from("."),
             built_at: Instant::now(),
+            gitignore_patterns: Vec::new(),
         }
     }
 
