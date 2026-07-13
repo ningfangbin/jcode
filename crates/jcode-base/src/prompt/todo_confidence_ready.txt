@@ -1,1 +1,0 @@
-Suggested action: use this confidence summary when deciding whether any further validation would materially improve certainty before finalizing.
