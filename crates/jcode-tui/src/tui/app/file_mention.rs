@@ -359,6 +359,45 @@ fn search_in_index(
         }
     }
 
+    // Inject directory entries for path-prefix matches so users can navigate
+    // into directories (e.g. @src/ shows "src/" as a selectable dir entry).
+    if !query.is_empty() {
+        let query_clean = query_lower.trim_end_matches('/');
+        let mut dirs: Vec<Arc<str>> = results
+            .iter()
+            .filter_map(|r| {
+                let p: &str = &r.path;
+                let slash_pos = p.rfind('/')?;
+                let dir = &p[..slash_pos + 1];
+                if dir.starts_with(query_clean) {
+                    Some(Arc::from(dir))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        // Also include the query itself as a directory if it's a prefix of
+        // any result.
+        if results.iter().any(|r| r.path.starts_with(&query_lower)) {
+            dirs.push(Arc::from(query_lower.as_str()));
+        }
+        // Dedup: collect existing paths before inserting.
+        let existing_paths: Vec<Arc<str>> = {
+            results.iter().map(|r| r.path.clone()).collect()
+        };
+        for dir in dirs {
+            if existing_paths.iter().any(|p| p.as_ref() == dir.as_ref()) {
+                continue;
+            }
+            results.push(FileMatch {
+                score: 95.0, // Directories rank above files for path-prefix queries.
+                path: dir,
+                is_directory: true,
+                is_recent: false,
+            });
+        }
+    }
+
     // Stable sort: score descending, then path ascending.
     results.sort_by(|a, b| {
         b.score
