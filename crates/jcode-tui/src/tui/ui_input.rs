@@ -20,7 +20,7 @@ fn shell_mode_color() -> Color {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ComposerMode {
+pub(crate) enum ComposerMode {
     Chat,
     SlashCommand,
     FileMention,
@@ -29,12 +29,12 @@ enum ComposerMode {
 }
 
 impl ComposerMode {
-    fn is_shell(self) -> bool {
+    pub(crate) fn is_shell(self) -> bool {
         matches!(self, Self::ShellLocal | Self::ShellRemote)
     }
 }
 
-fn composer_mode(input: &str, is_remote_mode: bool) -> ComposerMode {
+pub(crate) fn composer_mode(input: &str, is_remote_mode: bool) -> ComposerMode {
     if app::extract_input_shell_command(input).is_some() {
         if is_remote_mode {
             ComposerMode::ShellRemote

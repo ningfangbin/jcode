@@ -465,6 +465,11 @@ impl App {
     pub(super) fn get_suggestions_for(&self, input: &str) -> Vec<(String, &'static str)> {
         let input = input.trim_start();
 
+        // @file 补全（在 / 指令之前检查，但 / 优先于 @）
+        if crate::tui::ui::input_ui::has_active_at_mention(input) && !input.starts_with('/') {
+            return self.file_mention_suggestions();
+        }
+
         // Only show suggestions when input starts with /
         if !input.starts_with('/') {
             return vec![];
@@ -1104,6 +1109,48 @@ impl App {
         self.get_suggestions_for(&self.input)
     }
 
+    /// Generate file-mention suggestions from the @file query in the input.
+    fn file_mention_suggestions(&self) -> Vec<(String, &'static str)> {
+        let (_at_pos, query) =
+            match crate::tui::ui::input_ui::extract_at_query(&self.input) {
+                Some(q) => q,
+                None => return Vec::new(),
+            };
+
+        let cwd = self
+            .session
+            .working_dir
+            .as_deref()
+            .map(Path::new)
+            .unwrap_or_else(|| Path::new("."));
+
+        let cache = &mut *self.file_mention_cache.borrow_mut();
+        cache.check_refresh(cwd);
+
+        let candidates = cache.candidates(&query);
+
+        // First use: index is still building → show a hint.
+        if candidates.is_empty() {
+            return vec![(
+                "⏳ 正在建立文件索引...".into(),
+                "首次使用需要几秒",
+            )];
+        }
+
+        candidates
+            .into_iter()
+            .map(|c| {
+                let display = if c.is_directory {
+                    format!("{}/", c.path)
+                } else {
+                    c.path.to_string()
+                };
+                let desc: &'static str = if c.is_recent { "最近文件" } else { "" };
+                (display, desc)
+            })
+            .collect()
+    }
+
     fn clamp_command_suggestion_selection(&mut self) -> Vec<(String, &'static str)> {
         let suggestions = self.command_suggestions();
         if suggestions.is_empty() {
@@ -1169,6 +1216,29 @@ impl App {
             return false;
         };
         if cmd == self.input.trim() {
+            return false;
+        }
+
+        // FileMention mode: replace @query with path + record chip.
+        if crate::tui::ui::input_ui::composer_mode(&self.input, self.is_remote)
+            == crate::tui::ui::input_ui::ComposerMode::FileMention
+        {
+            let path = cmd.trim_end_matches('/');
+            let abs_path = resolve_path(
+                path,
+                self.session.working_dir.as_deref().map(Path::new),
+            );
+            if let Some((new_input, new_cursor)) =
+                crate::tui::ui::input_ui::replace_at_query(&self.input, path)
+            {
+                self.remember_input_undo_state();
+                self.input = new_input;
+                self.cursor_pos = new_cursor;
+                self.tab_completion_state = None;
+                self.command_suggestion_selected = 0;
+                self.file_chips.push(abs_path);
+                return true;
+            }
             return false;
         }
 
@@ -1351,6 +1421,13 @@ impl App {
 
     /// Autocomplete current input - cycles through suggestions on repeated Tab
     pub fn autocomplete(&mut self) -> bool {
+        // FileMention tab completion (two-step: common prefix → cycle).
+        if crate::tui::ui::input_ui::composer_mode(&self.input, self.is_remote)
+            == crate::tui::ui::input_ui::ComposerMode::FileMention
+        {
+            return self.autocomplete_file_mention();
+        }
+
         // Get suggestions for current input
         let current_suggestions = self.get_suggestions_for(&self.input);
 
@@ -1410,10 +1487,84 @@ impl App {
         true
     }
 
+    /// File-mention tab completion: common-prefix then cycle.
+    fn autocomplete_file_mention(&mut self) -> bool {
+        let (_, query) =
+            match crate::tui::ui::input_ui::extract_at_query(&self.input) {
+                Some(q) => q,
+                None => return false,
+            };
+
+        let suggestions = self.file_mention_suggestions();
+        if suggestions.is_empty() {
+            return false;
+        }
+
+        let paths: Vec<&str> = suggestions
+            .iter()
+            .map(|(s, _)| s.trim_end_matches('/'))
+            .collect();
+
+        // Step 1: longest common prefix (if it's longer than the current query).
+        if let Some(common) = common_prefix(&paths) {
+            if common.len() > query.len() && common.starts_with(&query) {
+                if let Some((new_input, new_cursor)) =
+                    crate::tui::ui::input_ui::replace_at_query_keep_at(
+                        &self.input, &common,
+                    )
+                {
+                    self.remember_input_undo_state();
+                    self.input = new_input;
+                    self.cursor_pos = new_cursor;
+                    self.tab_completion_state = None;
+                    return true;
+                }
+            }
+        }
+
+        // Step 2: cycle through candidates.
+        if self.tab_completion_state.is_none() {
+            self.tab_completion_state = Some((query.clone(), 0));
+        }
+
+        let (_base, next_index) =
+            self.tab_completion_state.as_mut().unwrap();
+        let cycle_idx = *next_index % paths.len();
+        *next_index = cycle_idx + 1;
+
+        if let Some((new_input, new_cursor)) =
+            crate::tui::ui::input_ui::replace_at_query_keep_at(
+                &self.input,
+                paths[cycle_idx],
+            )
+        {
+            self.remember_input_undo_state();
+            self.input = new_input;
+            self.cursor_pos = new_cursor;
+            return true;
+        }
+
+        false
+    }
+
     /// Reset tab completion state (call when user types/modifies input)
     pub fn reset_tab_completion(&mut self) {
         self.tab_completion_state = None;
         self.command_suggestion_selected = 0;
+    }
+
+    /// Remove file chips whose paths no longer appear in the input text.
+    ///
+    /// Uses substring matching: a chip is kept as long as its path string
+    /// appears anywhere in the input. This is a deliberate design choice:
+    /// false positives (keeping a chip too long) are safer than false
+    /// negatives (removing a chip that is still referenced).
+    pub(crate) fn prune_orphan_chips(&mut self) {
+        let text = &self.input;
+        self.file_chips.retain(|chip_path| {
+            let rel = chip_path.to_string_lossy();
+            text.contains(rel.as_ref())
+        });
     }
 
     pub(super) fn remember_input_undo_state(&mut self) {
@@ -1763,6 +1914,37 @@ fn compact_suggestion_text(text: &str, max_chars: usize) -> String {
         .collect::<String>();
     truncated.push('…');
     truncated
+}
+
+// ── FileMention helpers ────────────────────────────────────────────
+
+/// Longest common prefix of a list of strings.
+pub(crate) fn common_prefix(strings: &[&str]) -> Option<String> {
+    let first = strings.first()?;
+    let mut end = first.len();
+    for s in strings.iter().skip(1) {
+        end = first
+            .chars()
+            .zip(s.chars())
+            .take(end)
+            .take_while(|(a, b)| a == b)
+            .count();
+        if end == 0 {
+            return None;
+        }
+    }
+    Some(first[..end].to_string())
+}
+
+/// Resolve a relative or absolute path into an absolute `PathBuf`.
+pub(crate) fn resolve_path(path: &str, cwd: Option<&Path>) -> PathBuf {
+    let p = Path::new(path);
+    if p.is_absolute() {
+        return p.to_path_buf();
+    }
+    let cwd = cwd.unwrap_or_else(|| Path::new("."));
+    let resolved = cwd.join(p);
+    resolved.canonicalize().unwrap_or(resolved)
 }
 
 #[cfg(test)]
