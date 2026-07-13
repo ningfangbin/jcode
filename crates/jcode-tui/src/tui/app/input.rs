@@ -3780,4 +3780,26 @@ mod chip_deletion_tests {
         s.drain(cursor..end.unwrap());
         assert_eq!(s, "hello  more", "Delete removes whole path at once");
     }
+
+    #[test]
+    fn file_chip_backspace_after_non_ascii_suffix() {
+        let chips = [PathBuf::from("src/main.rs")];
+        // "help " (5) + "src/main.rs" (11) + "测试" (6) = 22 bytes
+        let input = "help src/main.rs\u{6d4b}\u{8bd5}";
+        let cursor = input.len();  // 22
+        let start = file_chip_backspace_start(input, cursor, &chips);
+        // Chip span is (5, 16). Cursor at 22. Priority 2: end(16) != cursor(22)
+        // → return end = 16. So drain 16..22 = "测试" deleted.
+        assert_eq!(start, Some(16), "1st BS deletes suffix: chip_end={}, cursor={}", 16, cursor);
+        
+        let mut s = String::from(input);
+        s.drain(start.unwrap()..cursor);
+        assert_eq!(s, "help src/main.rs");
+        
+        // 2nd Backspace: cursor at chip end → delete entire chip
+        let start2 = file_chip_backspace_start(&s, s.len(), &chips);
+        assert_eq!(start2, Some(5), "2nd BS deletes entire chip from byte 5");
+        s.drain(start2.unwrap()..s.len());
+        assert_eq!(s, "help ");
+    }
 }
