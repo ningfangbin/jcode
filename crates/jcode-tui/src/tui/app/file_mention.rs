@@ -381,7 +381,7 @@ fn matches_filter(path: &str, query: &str) -> bool {
 
 /// Tiered matching: try the fastest strategies first, only falling back to
 /// the expensive DP fuzzy matcher when nothing else matches.
-fn match_entry(entry: &FileEntry, query_lower: &str) -> f64 {
+fn match_entry(entry: &FileEntry, query_lower: &str, slash_query: &str) -> f64 {
     // L1 – filename prefix  (~30 ns)  ──────────────────────────────
     if entry.filename.starts_with(query_lower) {
         return 100.0 + (entry.filename.len() as f64).sqrt();
@@ -393,13 +393,9 @@ fn match_entry(entry: &FileEntry, query_lower: &str) -> f64 {
     }
 
     // L2b – path-segment prefix (query appears after / in path).
-    // e.g. query "src" matches "crates/jcode-tui/src/foo.rs" at the
-    // "/src" boundary, but NOT "scripts/foo.rs" (no /src segment).
-    {
-        let segment = format!("/{}", query_lower);
-        if let Some(pos) = entry.path.find(&segment) {
-            return 80.0 * (1.0 - (pos as f64 / entry.path.len().max(1) as f64));
-        }
+    // slash_query is precomputed as "/{query_lower}" once in the caller.
+    if let Some(pos) = entry.path.find(slash_query) {
+        return 80.0 * (1.0 - (pos as f64 / entry.path.len().max(1) as f64));
     }
 
     // L3 – filename substring  (~80 ns) ─────────────────────────────
@@ -505,6 +501,7 @@ fn search_in_index(
         return show_all_files(index, recent_files, MAX_RESULTS);
     }
     let query_lower = query_raw.to_lowercase();
+    let slash_query = format!("/{}", query_lower);
     let query_bag = CharBag::from(&query_lower);
     let mut results: Vec<FileMatch> = Vec::with_capacity(64);
 
@@ -515,7 +512,7 @@ fn search_in_index(
             continue;
         }
 
-        let score = match_entry(entry, &query_lower);
+        let score = match_entry(entry, &query_lower, &slash_query);
         if score > 0.0 {
             let is_recent = recent_files.contains(&entry.path);
             results.push(FileMatch {
@@ -1345,10 +1342,12 @@ mod tests {
 
     // -- match_entry ---------------------------------------------------------
 
+    fn s(q: &str) -> String { format!("/{}", q) }
+
     #[test]
     fn match_filename_prefix_wins() {
         let entry = file_entry("deep/nested/src/lib.rs");
-        let score = match_entry(&entry, "lib.rs");
+        let score = match_entry(&entry, "lib.rs", &s("lib.rs"));
         assert!(
             score > 90.0,
             "filename prefix should score high, got {score}"
@@ -1358,7 +1357,7 @@ mod tests {
     #[test]
     fn match_path_prefix() {
         let entry = file_entry("src/cli/args.rs");
-        let score = match_entry(&entry, "src/cli");
+        let score = match_entry(&entry, "src/cli", &s("src/cli"));
         assert!(
             score > 70.0,
             "path prefix should score high, got {score}"
@@ -1368,14 +1367,14 @@ mod tests {
     #[test]
     fn match_fuzzy_subsequence() {
         let entry = file_entry("src/cli/startup.rs");
-        let score = match_entry(&entry, "scli");
+        let score = match_entry(&entry, "scli", &s("scli"));
         assert!(score > 0.0, "fuzzy match should work for 'scli'");
     }
 
     #[test]
     fn match_no_match() {
         let entry = file_entry("src/lib.rs");
-        assert_eq!(match_entry(&entry, "xyz"), 0.0);
+        assert_eq!(match_entry(&entry, "xyz", &s("xyz")), 0.0);
     }
 
     // -- search_in_index ----------------------------------------------------
