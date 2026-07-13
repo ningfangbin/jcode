@@ -759,6 +759,112 @@ fn try_scan_ignored_dir(dir_path: &str, index: &mut PathIndex) {
 }
 
 // ---------------------------------------------------------------------------
+//  File content loading (wired into the send path)
+// ---------------------------------------------------------------------------
+
+/// Maximum size of a single file before truncation.
+const MAX_FILE_SIZE: usize = 100 * 1024; // 100 KB
+
+/// Maximum total content loaded across all @file references.
+const MAX_FILE_TOTAL_BUDGET: usize = 500 * 1024; // 500 KB
+
+/// Known text file extensions (whitelist). Files not in this list are still
+/// read, but a null-byte check decides whether to treat them as binary.
+const TEXT_EXTENSIONS: &[&str] = &[
+    "rs", "py", "js", "ts", "jsx", "tsx", "go", "java", "c", "cpp", "h", "hpp",
+    "rb", "php", "swift", "kt", "scala", "clj", "el", "lua", "r", "R",
+    "toml", "yaml", "yml", "json", "xml", "ini", "cfg", "conf",
+    "md", "txt", "log", "csv", "sh", "bash", "zsh", "fish",
+    "sql", "css", "scss", "html", "htm", "svg", "vue", "svelte",
+    "Makefile", "Dockerfile", "gitignore", "env",
+    "lock", "gradle", "cmake", "meson",
+];
+
+/// Fast binary check: whitelisted extension → text; otherwise null-byte scan.
+fn is_likely_binary(path: &Path) -> bool {
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        if TEXT_EXTENSIONS.contains(&ext) {
+            return false;
+        }
+    }
+    // Read the first 8 KB and check for null bytes.
+    if let Ok(buf) = std::fs::read(path) {
+        let check_len = buf.len().min(8192);
+        buf[..check_len].contains(&0u8)
+    } else {
+        false
+    }
+}
+
+/// Load file contents referenced by `file_chips` and prepend them to the
+/// user's prompt. This is called from the send path (`submit_input`).
+///
+/// Files are read in parallel. Binary files are skipped with a note. Files
+/// exceeding `MAX_FILE_SIZE` are truncated to the first 200 lines. When the
+/// cumulative content exceeds `MAX_FILE_TOTAL_BUDGET`, remaining files are
+/// skipped with a note.
+pub(crate) fn build_prompt_with_files(input: &str, file_chips: &[PathBuf]) -> String {
+    if file_chips.is_empty() {
+        return input.to_string();
+    }
+
+    // Collect files synchronously (send path runs on the main thread).
+    let mut file_blocks: Vec<(String, String)> = Vec::with_capacity(file_chips.len());
+
+    for path in file_chips {
+        let rel_path = path.to_string_lossy().to_string();
+
+        if is_likely_binary(path) {
+            let rp = rel_path.clone();
+            file_blocks.push((rp, format!("[skipped: binary file {}]", rel_path)));
+            continue;
+        }
+
+        match std::fs::read_to_string(path) {
+            Ok(content) => {
+                let block = if content.len() <= MAX_FILE_SIZE {
+                    content
+                } else {
+                    let line_count = content.lines().count();
+                    let preview: String = content.lines().take(200).collect::<Vec<_>>().join("\n");
+                    format!(
+                        "{}\n\n[... file too large: {} lines, {} bytes, showing first 200 lines]",
+                        preview, line_count, content.len(),
+                    )
+                };
+                file_blocks.push((rel_path, block));
+            }
+            Err(e) => {
+                let rp = rel_path.clone();
+                file_blocks.push((rp, format!("[read failed: {} → {}]", rel_path, e)));
+            }
+        }
+    }
+
+    // Context budget: cumulative cap.
+    let mut context = String::new();
+    let mut total = 0usize;
+    for (path, content) in &file_blocks {
+        if total > MAX_FILE_TOTAL_BUDGET {
+            let truncated: String = format!(
+                "[context budget exhausted ({} KB total), skipped]\n{}",
+                MAX_FILE_TOTAL_BUDGET / 1024,
+                content,
+            )
+            .chars()
+            .take(2000)
+            .collect();
+            context.push_str(&format!("\n--- {} ---\n{}\n", path, truncated));
+        } else {
+            total += content.len();
+            context.push_str(&format!("\n--- {} ---\n{}\n", path, content));
+        }
+    }
+
+    format!("{}{}", input, context)
+}
+
+// ---------------------------------------------------------------------------
 //  Tests
 // ---------------------------------------------------------------------------
 

@@ -3184,6 +3184,13 @@ impl App {
         self.pasted_contents.clear();
         self.cursor_pos = 0;
         self.clear_input_undo_history();
+
+        // Expand @file references: read file contents into the prompt.
+        if !self.file_chips.is_empty() {
+            let file_chips = std::mem::take(&mut self.file_chips);
+            input = crate::tui::app::file_mention::build_prompt_with_files(&input, &file_chips);
+        }
+
         self.follow_chat_bottom(); // Reset to bottom and resume auto-scroll on new input
 
         // If the previous assistant turn still has visible streamed text that has not yet been
