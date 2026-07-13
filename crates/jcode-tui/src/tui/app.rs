@@ -62,6 +62,7 @@ mod copy_selection;
 mod debug;
 mod dictation;
 mod event_wrappers;
+mod file_mention;
 mod handterm_native_scroll;
 pub(crate) mod helpers;
 mod hotkey_feedback;

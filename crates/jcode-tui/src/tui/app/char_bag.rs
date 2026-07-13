@@ -13,6 +13,15 @@ pub(crate) struct CharBag {
     bits: u64,
 }
 
+// Manual Debug to avoid printing raw bits.
+impl std::fmt::Debug for CharBag {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CharBag")
+            .field("bits", &format_args!("{:#018x}", self.bits))
+            .finish()
+    }
+}
+
 impl CharBag {
     /// Build a CharBag from a string. Characters are lowercased before mapping
     /// so that `Main.rs` and `main.rs` produce identical bags.
