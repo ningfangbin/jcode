@@ -465,7 +465,7 @@ impl App {
     pub(super) fn get_suggestions_for(&self, input: &str) -> Vec<(String, &'static str)> {
         let input = input.trim_start();
 
-        // @file 补全（在 / 指令之前检查，但 / 优先于 @）
+        // @file completions (checked before /, but / takes priority)
         if crate::tui::ui::input_ui::has_active_at_mention(input) && !input.starts_with('/') {
             return self.file_mention_suggestions();
         }
@@ -1132,8 +1132,8 @@ impl App {
         // First use: index is still building → show a hint.
         if candidates.is_empty() {
             return vec![(
-                "⏳ 正在建立文件索引...".into(),
-                "首次使用需要几秒",
+                "⏳ Building file index...".into(),
+                "first use takes a few seconds",
             )];
         }
 
@@ -1145,7 +1145,7 @@ impl App {
                 } else {
                     c.path.to_string()
                 };
-                let desc: &'static str = if c.is_recent { "最近文件" } else { "" };
+                let desc: &'static str = if c.is_recent { "recent" } else { "" };
                 (display, desc)
             })
             .collect()
@@ -1220,8 +1220,7 @@ impl App {
         }
 
         // FileMention mode: replace @query with path + record chip.
-        if crate::tui::ui::input_ui::composer_mode(&self.input, self.is_remote)
-            == crate::tui::ui::input_ui::ComposerMode::FileMention
+        if crate::tui::ui::input_ui::is_at_file_mode(&self.input, self.is_remote)
         {
             let path = cmd.trim_end_matches('/');
             let abs_path = resolve_path(
@@ -1422,8 +1421,7 @@ impl App {
     /// Autocomplete current input - cycles through suggestions on repeated Tab
     pub fn autocomplete(&mut self) -> bool {
         // FileMention tab completion (two-step: common prefix → cycle).
-        if crate::tui::ui::input_ui::composer_mode(&self.input, self.is_remote)
-            == crate::tui::ui::input_ui::ComposerMode::FileMention
+        if crate::tui::ui::input_ui::is_at_file_mode(&self.input, self.is_remote)
         {
             return self.autocomplete_file_mention();
         }

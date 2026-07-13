@@ -794,9 +794,9 @@ pub struct App {
     input: String,
     command_candidates_cache: RefCell<Option<CommandCandidatesCache>>,
     cursor_pos: usize,
-    /// @file 搜索缓存与索引
+    /// @file search cache and index
     file_mention_cache: RefCell<crate::tui::app::file_mention::FileMentionCache>,
-    /// 已确认的 @file 引用（绝对路径），发送时加载内容
+    /// Confirmed @file references (absolute paths); loaded on send
     file_chips: Vec<PathBuf>,
     scroll_offset: usize,
     /// Pauses auto-scroll when user scrolls up during streaming
