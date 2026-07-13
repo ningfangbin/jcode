@@ -2111,51 +2111,60 @@ pub(super) fn handle_enter(app: &mut App) -> bool {
 /// When multiple chips end at the cursor, the longest match wins to avoid
 /// accidentally matching a shorter chip-path that is a suffix of a longer one
 /// (e.g. `src/main.rs` vs `main.rs`).
-fn file_chip_backspace_start(input: &str, cursor: usize, chips: &[PathBuf]) -> Option<usize> {
-    chips
-        .iter()
-        .filter_map(|chip| {
-            let path = chip.to_string_lossy();
-            let path_len = path.len();
-            if cursor < path_len {
-                return None;
-            }
-            let candidate_start = cursor - path_len;
-            if input
-                .get(candidate_start..cursor)
-                .map_or(false, |s| s == path.as_ref())
-            {
-                Some(candidate_start)
-            } else {
-                None
-            }
-        })
-        .max_by_key(|start| cursor - start) // longest match wins
+/// Return the byte range `[start, end)` of every file chip path found in `input`.
+fn file_chip_spans(input: &str, chips: &[PathBuf]) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    for chip in chips {
+        let path = chip.to_string_lossy();
+        let mut search_from = 0usize;
+        while let Some(pos) = input[search_from..].find(path.as_ref()) {
+            let start = search_from + pos;
+            let end = start + path.len();
+            spans.push((start, end));
+            search_from = end;
+        }
+    }
+    spans.sort_by_key(|(s, _)| *s);
+    spans
 }
 
-/// If cursor is at the start of a file chip, return the byte position of the
-/// chip end so Delete removes the entire path at once. Otherwise None.
-///
-/// When multiple chips start at the cursor, the longest match wins.
-fn file_chip_delete_end(input: &str, cursor: usize, chips: &[PathBuf]) -> Option<usize> {
-    chips
+/// If `cursor` sits at or past the end of a file chip, return the byte offset
+/// of the chip's start so a single Backspace deletes the entire path.
+/// Also handles cursor sitting *inside* a chip (treated as atomic unit).
+fn file_chip_backspace_start(input: &str, cursor: usize, chips: &[PathBuf]) -> Option<usize> {
+    let spans = file_chip_spans(input, chips);
+    // Priority 1: cursor inside a chip → delete entire chip.
+    for (start, end) in &spans {
+        if cursor > *start && cursor <= *end {
+            return Some(*start);
+        }
+    }
+    // Priority 2: cursor at/past chip end.
+    spans
         .iter()
-        .filter_map(|chip| {
-            let path = chip.to_string_lossy();
-            let path_len = path.len();
-            if cursor + path_len > input.len() {
-                return None;
-            }
-            if input
-                .get(cursor..cursor + path_len)
-                .map_or(false, |s| s == path.as_ref())
-            {
-                Some(cursor + path_len)
+        .filter(|(_, end)| *end <= cursor)
+        .map(|(start, end)| {
+            if *end == cursor { *start } else { *end }
+        })
+        .max_by_key(|start| cursor - start)
+}
+
+/// If `cursor` sits at or before the start of a file chip, return the byte
+/// offset of the chip's end so a single Delete removes the entire path.
+fn file_chip_delete_end(input: &str, cursor: usize, chips: &[PathBuf]) -> Option<usize> {
+    let spans = file_chip_spans(input, chips);
+    spans
+        .iter()
+        .filter(|(start, _)| *start >= cursor)
+        .map(|(start, end)| {
+            if *start == cursor {
+                *end
             } else {
-                None
+                // Cursor before chip → delete text between cursor and chip-start.
+                *start
             }
         })
-        .max_by_key(|end| end - cursor) // longest match wins
+        .min_by_key(|end| end - cursor) // closest to cursor wins
 }
 
 pub(super) fn handle_basic_key(app: &mut App, code: KeyCode) -> bool {
