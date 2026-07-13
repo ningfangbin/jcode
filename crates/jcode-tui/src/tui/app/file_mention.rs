@@ -427,13 +427,20 @@ fn match_entry(entry: &FileEntry, query_lower: &str, slash_query: &str) -> f64 {
     // L5 – DP fuzzy subsequence  (~500 ns) ─────────────────────────
     // Uses jcode-fuzzy which already treats `/`, `-`, `_`, `.`, `:`
     // as boundary characters, giving path-like queries a natural boost.
-    let filename_score = jcode_fuzzy::fuzzy_score(query_lower, &entry.filename).unwrap_or(0) as f64;
-    let path_score = jcode_fuzzy::fuzzy_score(query_lower, &entry.path).unwrap_or(0) as f64;
+    //
+    // Skip fuzzy when query contains '/' — for structured path queries
+    // like "src/lib.rs", a weak fuzzy match against "src/cli/debug.rs"
+    // produces noise.  L1-L4 above are the correct minimum bar for
+    // path-like input.
+    if !query_lower.contains('/') {
+        let filename_score = jcode_fuzzy::fuzzy_score(query_lower, &entry.filename).unwrap_or(0) as f64;
+        let path_score = jcode_fuzzy::fuzzy_score(query_lower, &entry.path).unwrap_or(0) as f64;
 
-    if filename_score > 0.0 || path_score > 0.0 {
-        return 20.0
-            + filename_score.max(path_score) * 1.0
-            + if filename_score > 0.0 { 10.0 } else { 0.0 };
+        if filename_score > 0.0 || path_score > 0.0 {
+            return 20.0
+                + filename_score.max(path_score) * 1.0
+                + if filename_score > 0.0 { 10.0 } else { 0.0 };
+        }
     }
 
     0.0

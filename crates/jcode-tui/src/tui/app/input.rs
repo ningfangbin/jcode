@@ -3723,4 +3723,48 @@ mod chip_deletion_tests {
         assert!(start.is_some(), "should handle non-ASCII paths");
         assert_eq!(&input[start.unwrap()..cursor], "中文路径/文件.rs");
     }
+
+    /// Simulates the full flow: user selects @src/main.rs → chip stored,
+    /// cursor ends at path end → Backspace deletes entire path.
+    #[test]
+    fn backspace_deletes_whole_path_realistic_scenario() {
+        // After picking "src/main.rs" from @ suggestions, input is:
+        let input = "hello src/main.rs some more text";
+        // Cursor is at end of path: "hello src/main.rs" has 17 bytes,
+        // cursor on the space after main.rs
+        let cursor = 17; // right after "hello src/main.rs"
+        let chips = vec![chip("src/main.rs")];
+        let start = file_chip_backspace_start(input, cursor, &chips);
+        assert_eq!(start, Some(6), "should find chip start");
+        // After drain(6..17): "hello  some more text"
+        let mut s = input.to_string();
+        s.drain(start.unwrap()..cursor);
+        assert_eq!(s, "hello  some more text", "entire path removed at once");
+    }
+
+    /// Cursor at path end with suffix text: Backspace still deletes whole path.
+    #[test]
+    fn backspace_at_path_end_with_suffix() {
+        let input = "hello src/main.rs";
+        let cursor = input.len(); // 17
+        let chips = vec![chip("src/main.rs")];
+        let start = file_chip_backspace_start(input, cursor, &chips);
+        assert_eq!(start, Some(6));
+        let mut s = input.to_string();
+        s.drain(start.unwrap()..cursor);
+        assert_eq!(s, "hello ", "path fully removed, cursor at 'hello '");
+    }
+
+    /// Delete at path start with more text before: Delete removes whole path.
+    #[test]
+    fn delete_at_path_start_realistic() {
+        let input = "hello src/main.rs more";
+        let cursor = 6; // at start of "src/main.rs"
+        let chips = vec![chip("src/main.rs")];
+        let end = file_chip_delete_end(input, cursor, &chips);
+        assert_eq!(end, Some(17)); // "src/main.rs".len() == 11, 6+11=17
+        let mut s = input.to_string();
+        s.drain(cursor..end.unwrap());
+        assert_eq!(s, "hello  more", "Delete removes whole path at once");
+    }
 }
