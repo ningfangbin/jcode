@@ -78,7 +78,7 @@ fn shell_mode_hint(mode: ComposerMode) -> Option<&'static str> {
 
 /// Check whether the input contains an active @ mention.
 ///
-/// Rules (matching Zed's `MentionCompletion::try_parse`):
+/// @file mention parsing rules:
 ///   1. Find `@` from right to left
 ///   2. Left of `@` must be: SOL, whitespace, or `(` `[` `{`
 ///   3. No whitespace immediately after `@`

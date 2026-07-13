@@ -3665,12 +3665,16 @@ mod chip_deletion_tests {
     }
 
     #[test]
-    fn backspace_inside_chip_is_single_char() {
+    fn backspace_inside_chip_deletes_whole_path() {
         let input = "hello src/main.rs";
         let cursor = input.len() - 3;
         let chips = vec![chip("src/main.rs")];
         let start = file_chip_backspace_start(input, cursor, &chips);
-        assert_eq!(start, None, "cursor not at chip end → no bulk delete");
+        assert_eq!(
+            start,
+            Some(6),
+            "cursor inside chip → bulk delete entire chip"
+        );
     }
 
     #[test]

@@ -5,7 +5,7 @@
 //! bitwise-and instruction that runs in ~3 ns and eliminates 60-80% of
 //! candidates before the expensive fuzzy-match loop.
 //!
-//! This is a direct port of the same mechanism used by Zed's `fuzzy::CharBag`.
+//! Uses a compact u64 bitmap to pre-filter candidates before the fuzzy-match loop.
 
 /// A compact bitmap of the distinct characters in a string.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]

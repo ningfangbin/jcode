@@ -371,8 +371,8 @@ fn show_all_files(
         .collect();
 
     // Root-level entries: directories first, then visible files, skip hidden.
-    // This matches Zed's behavior where @ shows recent files + the top-level
-    // directory structure rather than every loose file.
+    // Shows recent files + the top-level directory structure rather than
+    // every loose file.
     let mut root_dirs: Vec<FileMatch> = Vec::new();
     let mut root_files: Vec<FileMatch> = Vec::new();
     for entry in index.entries.iter().chain(index.lazy_entries.iter()) {
@@ -1371,9 +1371,6 @@ mod tests {
         assert!(results.iter().any(|r| r.is_recent));
     }
 
-    // -- SearchHistory ------------------------------------------------------
-
-    #[test]
     // -- SearchHistory (exact-match only) -----------------------------------
 
     #[test]
