@@ -89,7 +89,9 @@ pub(crate) fn extract_at_query(input: &str) -> Option<(usize, String)> {
     let last_at = input
         .rmatch_indices('@')
         .find(|(idx, _)| {
-            // No whitespace immediately after @
+            // No whitespace immediately after @.
+            // Note: idx+1 may equal input.len() — the slice is empty and
+            // starts_with() returns false, which is correct.
             if input[*idx + 1..].starts_with(|c: char| c.is_whitespace()) {
                 return false;
             }
@@ -335,7 +337,7 @@ pub(super) fn input_hint_line_height(app: &dyn TuiState) -> u16 {
     let suggestions = app.command_suggestions();
     let mode = composer_mode(app.input(), app.is_remote_mode());
     let has_suggestions = !suggestions.is_empty()
-        && matches!(mode, ComposerMode::SlashCommand | ComposerMode::Chat)
+        && matches!(mode, ComposerMode::SlashCommand | ComposerMode::Chat | ComposerMode::FileMention)
         && (matches!(mode, ComposerMode::SlashCommand) || !app.is_processing());
 
     if has_suggestions {
@@ -2068,7 +2070,7 @@ pub(super) fn draw_input(
     let mode = composer_mode(input_text, app.is_remote_mode());
     let suggestions = app.command_suggestions();
     let has_suggestions = !suggestions.is_empty()
-        && matches!(mode, ComposerMode::SlashCommand | ComposerMode::Chat)
+        && matches!(mode, ComposerMode::SlashCommand | ComposerMode::Chat | ComposerMode::FileMention)
         && (matches!(mode, ComposerMode::SlashCommand) || !app.is_processing());
 
     let (prompt_char, caret_color) = input_prompt(app);
