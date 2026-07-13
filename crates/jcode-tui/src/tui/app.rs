@@ -51,6 +51,7 @@ pub enum AppRuntimeMode {
 mod auth;
 mod auth_account_picker_saved_accounts;
 mod catchup;
+mod char_bag;
 mod commands;
 mod commands_improve;
 mod commands_overnight;
