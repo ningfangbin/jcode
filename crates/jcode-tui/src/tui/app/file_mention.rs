@@ -564,10 +564,14 @@ fn search_in_index(
         }
     }
 
-    // Stable sort: score descending, then path ascending.
+    // Stable sort: score descending, then shorter paths first, then
+    // path ascending.  This ensures directories (score 110) appear
+    // before files (score ≤100), and within the same score tier,
+    // shorter paths rank higher.
     results.sort_by(|a, b| {
         b.score
             .total_cmp(&a.score)
+            .then_with(|| a.path.len().cmp(&b.path.len()))
             .then_with(|| a.path.cmp(&b.path))
     });
     results.truncate(MAX_RESULTS);

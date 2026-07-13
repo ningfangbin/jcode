@@ -271,11 +271,7 @@ fn command_suggestion_lines(
             };
             let mut spans = highlight(cmd, command_style);
             if is_dir && !is_selected {
-                // Append a folder indicator for directories.
-                spans.push(Span::styled(
-                    " >",
-                    Style::default().fg(rgb(120, 180, 220)),
-                ));
+                // Directory visual: just use blue styling, trailing / is enough.
             }
             if !desc.is_empty() {
                 spans.push(Span::styled(format!("  {}", desc), description_style));

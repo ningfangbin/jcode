@@ -1144,7 +1144,11 @@ impl App {
 
         for c in candidates {
             let display = if c.is_directory {
-                format!("{}/", c.path)
+                if c.path.ends_with('/') {
+                    c.path.to_string()
+                } else {
+                    format!("{}/", c.path)
+                }
             } else {
                 c.path.to_string()
             };
