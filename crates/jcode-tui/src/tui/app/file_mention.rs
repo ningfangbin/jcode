@@ -919,8 +919,15 @@ impl FileIndexManager {
 
 /// Top-level cache that wires together indexing, search, history, and lazy
 /// ignored-directory scanning.
+///
+/// Supports multiple workspace directories (P3-18). The first manager (index 0)
+/// is the primary workspace. Search results from secondary workspaces are
+/// prefixed with the workspace name.
 pub(crate) struct FileMentionCache {
-    index_manager: FileIndexManager,
+    /// Per-workspace index managers. Index 0 is the primary (cwd).
+    managers: Vec<FileIndexManager>,
+    /// Workspace display names (last path component) for result prefixing.
+    workspace_names: Vec<String>,
     history: SearchHistory,
     /// Recently-opened files (capped at 10), used for ranking.
     recent_files: VecDeque<Arc<str>>,
@@ -929,20 +936,27 @@ pub(crate) struct FileMentionCache {
 impl FileMentionCache {
     pub fn new() -> Self {
         Self {
-            index_manager: FileIndexManager::new(PathBuf::new()),
+            managers: vec![FileIndexManager::new(PathBuf::new())],
+            workspace_names: vec![String::new()],
             history: SearchHistory::new(),
             recent_files: VecDeque::new(),
         }
     }
-}
 
-impl Default for FileMentionCache {
-    fn default() -> Self {
-        Self::new()
+    /// Add an additional workspace directory to search.
+    #[allow(dead_code)]
+    pub fn add_workspace(&mut self, path: &Path) {
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(".")
+            .to_string();
+        self.managers
+            .push(FileIndexManager::new(path.to_path_buf()));
+        self.workspace_names.push(name);
     }
-}
 
-impl FileMentionCache {
+    /// Main entry-point: return candidate files for `query`.
     ///
     /// Must return in < 5 ms on the synchronous UI thread.
     pub fn candidates(&mut self, query: &str) -> Vec<FileMatch> {
@@ -952,28 +966,46 @@ impl FileMentionCache {
             LookupResult::Miss => {}
         }
 
-        // 2. Snapshot current index.
-        let snapshot = self.index_manager.snapshot();
-
-        // If the index is still empty, trigger a background build and bail.
-        if snapshot.entries.is_empty() {
-            self.index_manager.refresh_async();
-            return Vec::new();
-        }
-
-        // 3. On-demand lazy scan for ignored directories.
-        let mut index = (*snapshot).clone();
-        if !query.is_empty() {
-            ensure_ignored_dir_scanned(query, &mut index);
-        }
-
-        // 4. Full search.
         let recent: Vec<Arc<str>> = self.recent_files.iter().cloned().collect();
-        let results = search_in_index(query, &index, &recent);
+        let mut all_results: Vec<FileMatch> = Vec::new();
 
-        // 5. Persist in history.
-        self.history.save(query, &results);
-        results
+        for (wi, manager) in self.managers.iter().enumerate() {
+            let snapshot = manager.snapshot();
+            if snapshot.entries.is_empty() {
+                manager.refresh_async();
+                continue;
+            }
+
+            let mut index = (*snapshot).clone();
+            if !query.is_empty() {
+                ensure_ignored_dir_scanned(query, &mut index);
+            }
+
+            let results = search_in_index(query, &index, &recent);
+
+            // Prefix paths from secondary workspaces.
+            if wi > 0 {
+                let prefix = &self.workspace_names[wi];
+                all_results.extend(results.into_iter().map(|mut m| {
+                    m.path = Arc::from(format!("{}/{}", prefix, m.path).as_str());
+                    m
+                }));
+            } else {
+                all_results.extend(results);
+            }
+        }
+
+        // Sort merged results by score, truncate.
+        all_results.sort_by(|a, b| {
+            b.score
+                .total_cmp(&a.score)
+                .then_with(|| a.path.cmp(&b.path))
+        });
+        all_results.truncate(MAX_RESULTS);
+
+        // Persist in history.
+        self.history.save(query, &all_results);
+        all_results
     }
 
     /// Record a file open so it ranks higher in future searches.
@@ -989,23 +1021,27 @@ impl FileMentionCache {
 
     /// Ensure the index is still valid for the current working directory.
     pub fn check_refresh(&mut self, cwd: &Path) {
-        if self.index_manager.cwd() != cwd {
-            self.index_manager = FileIndexManager::new(cwd.to_path_buf());
+        // Primary workspace: recreate if cwd changed.
+        if self.managers[0].cwd() != cwd {
+            self.managers[0] = FileIndexManager::new(cwd.to_path_buf());
+            self.workspace_names[0] = cwd
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(".")
+                .to_string();
             self.history = SearchHistory::new();
         }
 
-        let index = self.index_manager.snapshot();
+        for manager in &self.managers {
+            let index = manager.snapshot();
+            let dirty = manager.dirty.swap(false, Ordering::Acquire);
+            let needs_refresh = index.entries.is_empty()
+                || dirty
+                || index.built_at.elapsed() > Duration::from_secs(30);
 
-        // Check dirty flag from file watcher (P2-16 notify integration).
-        // If the watcher detected changes, re-index regardless of TTL.
-        let dirty = self.index_manager.dirty.swap(false, Ordering::Acquire);
-
-        let needs_refresh = index.entries.is_empty()
-            || dirty
-            || index.built_at.elapsed() > Duration::from_secs(30);
-
-        if needs_refresh && !self.index_manager.is_refreshing() {
-            self.index_manager.refresh_async();
+            if needs_refresh && !manager.is_refreshing() {
+                manager.refresh_async();
+            }
         }
     }
 }
