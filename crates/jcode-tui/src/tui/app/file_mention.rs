@@ -658,8 +658,15 @@ impl FileMentionCache {
             recent_files: VecDeque::new(),
         }
     }
+}
 
-    /// Main entry-point: return candidate files for `query`.
+impl Default for FileMentionCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FileMentionCache {
     ///
     /// Must return in < 5 ms on the synchronous UI thread.
     pub fn candidates(&mut self, query: &str) -> Vec<FileMatch> {
