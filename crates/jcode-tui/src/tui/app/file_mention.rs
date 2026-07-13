@@ -498,7 +498,13 @@ fn search_in_index(
         return show_all_files(index, recent_files, MAX_RESULTS);
     }
 
-    let query_lower = query.to_lowercase();
+    // Normalize query: strip leading "/" so "@src" and "@/src" behave
+    // identically (both compare against relative paths).
+    let query_raw = query.trim_start_matches('/');
+    if query_raw.is_empty() {
+        return show_all_files(index, recent_files, MAX_RESULTS);
+    }
+    let query_lower = query_raw.to_lowercase();
     let query_bag = CharBag::from(&query_lower);
     let mut results: Vec<FileMatch> = Vec::with_capacity(64);
 
@@ -975,7 +981,11 @@ impl FileMentionCache {
 
             let mut index = (*snapshot).clone();
             if !query.is_empty() {
-                ensure_ignored_dir_scanned(query, &mut index);
+                // Strip leading / for path resolution.
+                let q = query.trim_start_matches('/');
+                if !q.is_empty() {
+                    ensure_ignored_dir_scanned(q, &mut index);
+                }
             }
 
             let results = search_in_index(query, &index, &recent);
