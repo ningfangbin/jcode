@@ -279,14 +279,30 @@ fn match_entry(entry: &FileEntry, query_lower: &str) -> f64 {
         return 85.0;
     }
 
+    // L2b – path-segment prefix (query appears after / in path).
+    // e.g. query "src" matches "crates/jcode-tui/src/foo.rs" at the
+    // "/src" boundary, but NOT "scripts/foo.rs" (no /src segment).
+    {
+        let segment = format!("/{}", query_lower);
+        if let Some(pos) = entry.path.find(&segment) {
+            return 80.0 * (1.0 - (pos as f64 / entry.path.len().max(1) as f64));
+        }
+    }
+
     // L3 – filename substring  (~80 ns) ─────────────────────────────
     if let Some(pos) = entry.filename.find(query_lower) {
         return 65.0 * (1.0 - (pos as f64 / entry.filename.len().max(1) as f64));
     }
 
-    // L4 – full-path substring  (~100 ns) ───────────────────────────
+    // L4 – full-path substring at segment boundary only.
+    // Avoids matching "src" inside "crates/jcode-app-core/src/..."
+    // indiscriminately (those are handled by L2b above).
     if let Some(pos) = entry.path.find(query_lower) {
-        return 45.0 * (1.0 - (pos as f64 / entry.path.len().max(1) as f64));
+        let is_segment_boundary = pos == 0
+            || entry.path.as_bytes().get(pos.wrapping_sub(1)) == Some(&b'/');
+        if is_segment_boundary {
+            return 45.0 * (1.0 - (pos as f64 / entry.path.len().max(1) as f64));
+        }
     }
 
     // L5 – DP fuzzy subsequence  (~500 ns) ─────────────────────────
@@ -396,11 +412,9 @@ fn search_in_index(
         }
     }
 
-    // Inject directory entries so users can navigate into subdirectories
-    // by selecting them (e.g. @src shows "src/" and "crates/jcode-tui/src/"
-    // as top suggestions, regardless of which worktree subtree they sit in).
+    // Inject matching ancestor directories so users can navigate into
+    // them (e.g. @src shows crates/jcode-tui/src/ as a clickable dir).
     if !query.is_empty() {
-        // Collect unique ancestor directories from matching results.
         let mut new_dirs: Vec<FileMatch> = Vec::new();
         let mut seen: HashSet<Arc<str>> = HashSet::new();
         for r in &results {
@@ -411,14 +425,17 @@ fn search_in_index(
             let mut remaining = full;
             while let Some(slash) = remaining.rfind('/') {
                 let ancestor = &full[..slash + 1];
+                // Stop walking up once the ancestor no longer matches.
                 if !dir_matches_query(&query_lower, ancestor) {
                     break;
                 }
                 let key: Arc<str> = Arc::from(ancestor);
                 if !seen.contains(&key) {
                     seen.insert(key.clone());
+                    // Shorter paths rank higher within the same score tier.
+                    let depth_penalty = ancestor.matches('/').count() as f64 * 0.5;
                     new_dirs.push(FileMatch {
-                        score: 95.0,
+                        score: 95.0 - depth_penalty,
                         path: key,
                         is_directory: true,
                         is_recent: false,
@@ -885,23 +902,80 @@ fn is_likely_binary(path: &Path) -> bool {
     }
 }
 
+/// Recursively collect files from a directory, respecting SKIP_DIRS blacklist.
+/// Stops after `max_files` entries.
+fn collect_dir_files(
+    dir: &Path,
+    _cwd: &Path,
+    out: &mut Vec<PathBuf>,
+    seen: &mut HashSet<PathBuf>,
+    max_files: usize,
+) {
+    if out.len() >= max_files || !dir.is_dir() {
+        return;
+    }
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for entry in rd.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            // Skip symlinks.
+            if entry.file_type().is_ok_and(|ft| ft.is_symlink()) {
+                continue;
+            }
+            if path.is_dir() {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if SKIP_DIRS.contains(&name) {
+                    continue;
+                }
+                collect_dir_files(&path, _cwd, out, seen, max_files);
+            } else if seen.insert(path.clone()) {
+                out.push(path);
+                if out.len() >= max_files {
+                    return;
+                }
+            }
+        }
+    }
+}
+
 /// Load file contents referenced by `file_chips` and prepend them to the
 /// user's prompt. This is called from the send path (`submit_input`).
 ///
-/// Files are read in parallel. Binary files are skipped with a note. Files
-/// exceeding `MAX_FILE_SIZE` are truncated to the first 200 lines. When the
-/// cumulative content exceeds `MAX_FILE_TOTAL_BUDGET`, remaining files are
-/// skipped with a note.
+/// `file_chips` contains relative paths (as they appear in the input text).
+/// Paths are resolved against the current directory. Directories are
+/// recursively walked (up to 50 files per directory, respecting SKIP_DIRS).
+/// The same binary detection, size truncation, and budget management applies.
 pub(crate) fn build_prompt_with_files(input: &str, file_chips: &[PathBuf]) -> String {
     if file_chips.is_empty() {
         return input.to_string();
     }
 
-    // Collect files synchronously (send path runs on the main thread).
-    let mut file_blocks: Vec<(String, String)> = Vec::with_capacity(file_chips.len());
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
-    for path in file_chips {
-        let rel_path = path.to_string_lossy().to_string();
+    // Expand directories into individual file paths.
+    let mut expanded_files: Vec<PathBuf> = Vec::new();
+    const MAX_FILES_PER_DIR: usize = 50;
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+
+    for chip in file_chips {
+        let abs = cwd.join(chip);
+        if abs.is_dir() {
+            // Recursively collect files, respecting skip dirs.
+            collect_dir_files(&abs, &cwd, &mut expanded_files, &mut seen, MAX_FILES_PER_DIR);
+        } else {
+            if seen.insert(abs.clone()) {
+                expanded_files.push(abs);
+            }
+        }
+    }
+
+    // Collect files synchronously (send path runs on the main thread).
+    let mut file_blocks: Vec<(String, String)> = Vec::with_capacity(expanded_files.len());
+
+    for path in &expanded_files {
+        let rel_path = path
+            .strip_prefix(&cwd)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| path.to_string_lossy().to_string());
 
         if is_likely_binary(path) {
             let rp = rel_path.clone();

@@ -1137,18 +1137,41 @@ impl App {
             )];
         }
 
-        candidates
-            .into_iter()
-            .map(|c| {
-                let display = if c.is_directory {
-                    format!("{}/", c.path)
-                } else {
-                    c.path.to_string()
-                };
-                let desc: &'static str = if c.is_recent { "recent" } else { "" };
-                (display, desc)
-            })
-            .collect()
+        // Group into Recent / Files sections (design §14).
+        let mut grouped: Vec<(String, &'static str)> = Vec::new();
+        let mut recent: Vec<(String, &'static str)> = Vec::new();
+        let mut files: Vec<(String, &'static str)> = Vec::new();
+
+        for c in candidates {
+            let display = if c.is_directory {
+                format!("{}/", c.path)
+            } else {
+                c.path.to_string()
+            };
+            let desc: &'static str = if c.is_likely_binary {
+                "binary"
+            } else if c.is_recent {
+                "recent"
+            } else {
+                ""
+            };
+            if c.is_recent {
+                recent.push((display, desc));
+            } else {
+                files.push((display, desc));
+            }
+        }
+
+        // Section header entries use empty cmd as sentinel.
+        if !recent.is_empty() {
+            grouped.push((String::new(), "── Recent ──"));
+            grouped.extend(recent);
+        }
+        if !files.is_empty() {
+            grouped.push((String::new(), "── Files ──"));
+            grouped.extend(files);
+        }
+        grouped
     }
 
     fn clamp_command_suggestion_selection(&mut self) -> Vec<(String, &'static str)> {
@@ -1159,8 +1182,26 @@ impl App {
             self.command_suggestion_selected = self
                 .command_suggestion_selected
                 .min(suggestions.len().saturating_sub(1));
+            // Skip past section headers (empty cmd) in file-mention mode.
+            Self::skip_section_headers_down(
+                &mut self.command_suggestion_selected,
+                &suggestions,
+            );
         }
         suggestions
+    }
+
+    /// Advance idx forward past any section-header entries (empty cmd).
+    fn skip_section_headers_down(idx: &mut usize, suggestions: &[(String, &'static str)]) {
+        let len = suggestions.len();
+        if len == 0 {
+            return;
+        }
+        let initial = *idx;
+        while suggestions[*idx].0.is_empty() {
+            *idx = (*idx + 1) % len;
+            if *idx == initial { break; }
+        }
     }
 
     pub(super) fn move_command_suggestion_selection(&mut self, delta: i32) -> bool {
@@ -1172,7 +1213,35 @@ impl App {
         let len = suggestions.len() as i32;
         let selected = self.command_suggestion_selected as i32;
         self.command_suggestion_selected = (selected + delta).rem_euclid(len) as usize;
+
+        // File-mention mode: skip section headers.
+        if crate::tui::ui::input_ui::is_at_file_mode(&self.input, self.is_remote) {
+            if delta > 0 {
+                Self::skip_section_headers_down(
+                    &mut self.command_suggestion_selected,
+                    &suggestions,
+                );
+            } else {
+                Self::skip_section_headers_up(
+                    &mut self.command_suggestion_selected,
+                    &suggestions,
+                );
+            }
+        }
         true
+    }
+
+    /// Retreat idx backward past any section-header entries (empty cmd).
+    fn skip_section_headers_up(idx: &mut usize, suggestions: &[(String, &'static str)]) {
+        let len = suggestions.len();
+        if len == 0 {
+            return;
+        }
+        let initial = *idx;
+        while suggestions[*idx].0.is_empty() {
+            *idx = idx.wrapping_sub(1) % len;
+            if *idx == initial { break; }
+        }
     }
 
     fn arrow_modifiers_allow_command_suggestion_navigation(modifiers: KeyModifiers) -> bool {
@@ -1222,28 +1291,30 @@ impl App {
         // FileMention mode: replace @query with path + record chip.
         if crate::tui::ui::input_ui::is_at_file_mode(&self.input, self.is_remote)
         {
-            let path = cmd.trim_end_matches('/');
-            let abs_path = resolve_path(
-                path,
-                self.session.working_dir.as_deref().map(Path::new),
-            );
+            // Guard: skip section headers.
+            if cmd.is_empty() {
+                return false;
+            }
+            let rel_path = cmd.trim_end_matches('/').trim_end_matches(" >");
+            // Store the relative path in file_chips (matches the input text so
+            // prune_orphan_chips works correctly). Resolve to absolute at send time.
+            self.file_chips.push(PathBuf::from(rel_path));
+
+            // Record for recent-file ranking (store relative path for index lookup).
+            self.file_mention_cache
+                .borrow_mut()
+                .record_file_open(
+                    std::sync::Arc::from(rel_path),
+                );
+
             if let Some((new_input, new_cursor)) =
-                crate::tui::ui::input_ui::replace_at_query(&self.input, path)
+                crate::tui::ui::input_ui::replace_at_query(&self.input, rel_path)
             {
                 self.remember_input_undo_state();
                 self.input = new_input;
                 self.cursor_pos = new_cursor;
                 self.tab_completion_state = None;
                 self.command_suggestion_selected = 0;
-                self.file_chips.push(abs_path.clone());
-
-                // Record for recent-file ranking.
-                self.file_mention_cache
-                    .borrow_mut()
-                    .record_file_open(
-                        abs_path.to_string_lossy().into(),
-                    );
-
                 return true;
             }
             return false;
@@ -1506,8 +1577,10 @@ impl App {
             return false;
         }
 
+        // Filter out section headers (empty cmd).
         let paths: Vec<&str> = suggestions
             .iter()
+            .filter(|(s, _)| !s.is_empty())
             .map(|(s, _)| s.trim_end_matches('/'))
             .collect();
 
@@ -1944,6 +2017,7 @@ fn common_prefix(strings: &[&str]) -> Option<String> {
 }
 
 /// Resolve a relative or absolute path into an absolute `PathBuf`.
+#[allow(dead_code)]
 fn resolve_path(path: &str, cwd: Option<&Path>) -> PathBuf {
     let p = Path::new(path);
     if p.is_absolute() {

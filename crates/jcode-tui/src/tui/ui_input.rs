@@ -14,10 +14,17 @@ use crate::tui::info_widget::occasional_status_tip;
 use crate::tui::layout_utils;
 use crate::tui::session_facts;
 use ratatui::{prelude::*, style::Modifier, widgets::Paragraph};
-use std::path::PathBuf;
+
 
 fn shell_mode_color() -> Color {
     rgb(110, 214, 151)
+}
+
+fn file_chip_style() -> Style {
+    Style::default()
+        .fg(rgb(20, 60, 80))
+        .bg(rgb(90, 210, 210))
+        .add_modifier(Modifier::BOLD)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -236,6 +243,17 @@ fn command_suggestion_lines(
 
         for (i, (cmd, desc)) in limited.iter().enumerate() {
             let is_selected = i == selected_visible;
+            let is_section_header = is_file_mention && cmd.is_empty();
+
+            // Section headers render as dimmed, non-selectable lines.
+            if is_section_header {
+                lines.push(Line::from(vec![Span::styled(
+                    format!("  {}", desc),
+                    Style::default().fg(dim_color()).add_modifier(Modifier::BOLD),
+                )]));
+                continue;
+            }
+
             let is_dir = is_file_mention && cmd.ends_with('/');
 
             let description_style = if is_selected {
@@ -2159,13 +2177,14 @@ pub(super) fn draw_input(
         prompt_len,
     );
 
-    // Highlight confirmed @file paths in a distinct color.
+    // Highlight confirmed @file paths with a distinct chip style
+    // (background color + bold) to visually separate them from plain text.
     let all_lines: Vec<Line> = {
         let chips = app.file_chips();
         if chips.is_empty() {
             all_lines
         } else {
-            let chip_color = rgb(120, 200, 255);
+            let chip_style = file_chip_style();
             all_lines
                 .into_iter()
                 .map(|line| {
@@ -2196,7 +2215,7 @@ pub(super) fn draw_input(
                                 }
                                 new_spans.push(Span::styled(
                                     text[e_start..e_end].to_string(),
-                                    span.style.fg(chip_color),
+                                    chip_style,
                                 ));
                                 start = e_end;
                             } else {
