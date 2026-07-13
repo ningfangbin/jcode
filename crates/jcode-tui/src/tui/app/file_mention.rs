@@ -10,9 +10,8 @@ use super::char_bag::CharBag;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
 
 // ---------------------------------------------------------------------------
 //  Data models
@@ -536,13 +535,17 @@ async fn build_path_index(cwd: &Path) -> PathIndex {
 
 /// Manages background index builds with lock-free reads.
 ///
-/// - Reads (`snapshot`) use `tokio::sync::RwLock::blocking_read` — no lock
-///   contention on the hot search path.
-/// - Writes happen in `tokio::spawn` tasks; the write-lock is held only for
-///   the duration of an `Arc` pointer swap.
+/// - Reads (`snapshot`) use `std::sync::RwLock::read` — the read lock is
+///   never contended because the write lock is held for nanoseconds (an
+///   `Arc` pointer swap).
+/// - Writes happen in `tokio::spawn` tasks; `std::sync::RwLock::write`
+///   blocks the worker thread briefly, which is acceptable for a sub-µs
+///   critical section.
 ///
-/// **Important**: This *must* use `tokio::sync::RwLock`, not
-/// `std::sync::RwLock`. The latter does not support `.write().await`.
+/// We deliberately use `std::sync::RwLock`, **not** `tokio::sync::RwLock`.
+/// `tokio::sync::RwLock::blocking_read()` panics when called from inside a
+/// tokio runtime, and `snapshot()` is called from the sync hot path which
+/// runs on the tokio main thread.
 struct FileIndexManager {
     current: Arc<RwLock<Arc<PathIndex>>>,
     cwd: PathBuf,
@@ -558,11 +561,12 @@ impl FileIndexManager {
         }
     }
 
-    /// Obtain a lightweight snapshot of the current index. Safe to call from
-    /// the synchronous hot path because the write-lock is held extremely
-    /// briefly.
+    /// Obtain a lightweight snapshot of the current index.
+    ///
+    /// Uses `std::sync::RwLock::read` — safe on the sync hot path because
+    /// the write lock is only held for an `Arc` pointer swap (~ns).
     pub fn snapshot(&self) -> Arc<PathIndex> {
-        self.current.blocking_read().clone()
+        self.current.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Kick off an async background refresh.
@@ -580,9 +584,9 @@ impl FileIndexManager {
         tokio::spawn(async move {
             let new_index = build_path_index(&cwd).await;
 
-            // Hold the write lock for the minimum possible time.
+            // Write lock held for sub-µs: just an Arc pointer swap.
             {
-                let mut guard = current.write().await;
+                let mut guard = current.write().unwrap_or_else(|e| e.into_inner());
                 *guard = Arc::new(new_index);
             }
 
