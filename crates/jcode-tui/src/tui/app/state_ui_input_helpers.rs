@@ -1955,6 +1955,51 @@ fn resolve_path(path: &str, cwd: Option<&Path>) -> PathBuf {
 }
 
 #[cfg(test)]
+mod file_mention_helper_tests {
+    use super::*;
+
+    #[test]
+    fn common_prefix_basic() {
+        assert_eq!(
+            common_prefix(&["src/cli/startup.rs", "src/cli/selfdev.rs"]),
+            Some("src/cli/s".to_string())
+        );
+    }
+
+    #[test]
+    fn common_prefix_single() {
+        assert_eq!(
+            common_prefix(&["src/main.rs"]),
+            Some("src/main.rs".to_string())
+        );
+    }
+
+    #[test]
+    fn common_prefix_none() {
+        assert_eq!(common_prefix(&["a/b", "c/d"]), None);
+    }
+
+    #[test]
+    fn common_prefix_empty() {
+        assert_eq!(common_prefix(&[]), None);
+    }
+
+    #[test]
+    fn resolve_path_relative() {
+        let cwd = Path::new("/home/user/project");
+        let result = resolve_path("src/main.rs", Some(cwd));
+        assert!(result.ends_with("src/main.rs"));
+        assert!(result.starts_with("/"));
+    }
+
+    #[test]
+    fn resolve_path_absolute() {
+        let result = resolve_path("/etc/hosts", None);
+        assert_eq!(result, PathBuf::from("/etc/hosts"));
+    }
+}
+
+#[cfg(test)]
 mod external_cli_suggestion_tests {
     use super::*;
     use std::io::Write;

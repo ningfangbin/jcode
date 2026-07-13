@@ -1465,6 +1465,52 @@ mod tests {
     }
 
     #[test]
+    fn composer_mode_detects_at_file_mention() {
+        assert_eq!(composer_mode("@", false), ComposerMode::FileMention);
+        assert_eq!(composer_mode("@main.rs", false), ComposerMode::FileMention);
+        // @ after space should not trigger
+        assert_eq!(composer_mode(" @ ", false), ComposerMode::Chat);
+        // mid-word @ should not trigger
+        assert_eq!(composer_mode("test@main", false), ComposerMode::Chat);
+        // / takes priority over @
+        assert_eq!(
+            composer_mode("/help @main", false),
+            ComposerMode::SlashCommand
+        );
+        // Remote mode still allows @file
+        assert_eq!(composer_mode("@main", true), ComposerMode::FileMention);
+    }
+
+    #[test]
+    fn extract_at_query_basic() {
+        assert_eq!(
+            extract_at_query("help @main.rs"),
+            Some((5, "main.rs".to_string()))
+        );
+        assert_eq!(extract_at_query("@"), Some((0, "".to_string())));
+        assert_eq!(extract_at_query("x @main.rs y"), Some((2, "main.rs".to_string())));
+    }
+
+    #[test]
+    fn extract_at_query_no_trigger() {
+        assert_eq!(extract_at_query("@ "), None);
+        assert_eq!(extract_at_query("test@main"), None);
+        assert_eq!(extract_at_query(""), None);
+    }
+
+    #[test]
+    fn replace_at_query_drops_at_sign() {
+        let result = replace_at_query("see @main.rs please", "src/main.rs");
+        assert_eq!(result, Some(("see src/main.rs please".to_string(), 4 + "src/main.rs".len())));
+    }
+
+    #[test]
+    fn replace_at_query_keep_at_preserves_prefix() {
+        let result = replace_at_query_keep_at("see @mai", "main.rs");
+        assert_eq!(result, Some(("see @main.rs".to_string(), 5 + "main.rs".len())));
+    }
+
+    #[test]
     fn shell_mode_hint_reflects_execution_target() {
         assert_eq!(
             shell_mode_hint(ComposerMode::ShellLocal),
