@@ -2103,15 +2103,76 @@ pub(super) fn handle_enter(app: &mut App) -> bool {
     true
 }
 
+// ── File-chip aware deletion ───────────────────────────────────────
+
+/// If cursor is at the end of a file chip, return the byte position of the
+/// chip start so Backspace deletes the entire path at once. Otherwise None.
+///
+/// When multiple chips end at the cursor, the longest match wins to avoid
+/// accidentally matching a shorter chip-path that is a suffix of a longer one
+/// (e.g. `src/main.rs` vs `main.rs`).
+fn file_chip_backspace_start(input: &str, cursor: usize, chips: &[PathBuf]) -> Option<usize> {
+    chips
+        .iter()
+        .filter_map(|chip| {
+            let path = chip.to_string_lossy();
+            let path_len = path.len();
+            if cursor < path_len {
+                return None;
+            }
+            let candidate_start = cursor - path_len;
+            if input
+                .get(candidate_start..cursor)
+                .map_or(false, |s| s == path.as_ref())
+            {
+                Some(candidate_start)
+            } else {
+                None
+            }
+        })
+        .max_by_key(|start| cursor - start) // longest match wins
+}
+
+/// If cursor is at the start of a file chip, return the byte position of the
+/// chip end so Delete removes the entire path at once. Otherwise None.
+///
+/// When multiple chips start at the cursor, the longest match wins.
+fn file_chip_delete_end(input: &str, cursor: usize, chips: &[PathBuf]) -> Option<usize> {
+    chips
+        .iter()
+        .filter_map(|chip| {
+            let path = chip.to_string_lossy();
+            let path_len = path.len();
+            if cursor + path_len > input.len() {
+                return None;
+            }
+            if input
+                .get(cursor..cursor + path_len)
+                .map_or(false, |s| s == path.as_ref())
+            {
+                Some(cursor + path_len)
+            } else {
+                None
+            }
+        })
+        .max_by_key(|end| end - cursor) // longest match wins
+}
+
 pub(super) fn handle_basic_key(app: &mut App, code: KeyCode) -> bool {
     match code {
         KeyCode::Char(c) => handle_text_input(app, &c.to_string()),
         KeyCode::Backspace => {
             if app.cursor_pos > 0 {
                 let prev = crate::tui::core::prev_char_boundary(&app.input, app.cursor_pos);
+                let drain_start = file_chip_backspace_start(
+                    &app.input,
+                    app.cursor_pos,
+                    &app.file_chips,
+                )
+                .unwrap_or(prev);
                 app.remember_input_undo_state();
-                app.input.drain(prev..app.cursor_pos);
-                app.cursor_pos = prev;
+                app.input.drain(drain_start..app.cursor_pos);
+                app.cursor_pos = drain_start;
                 app.reset_tab_completion();
                 app.sync_model_picker_preview_from_input();
             }
@@ -2120,8 +2181,14 @@ pub(super) fn handle_basic_key(app: &mut App, code: KeyCode) -> bool {
         KeyCode::Delete => {
             if app.cursor_pos < app.input.len() {
                 let next = crate::tui::core::next_char_boundary(&app.input, app.cursor_pos);
+                let drain_end = file_chip_delete_end(
+                    &app.input,
+                    app.cursor_pos,
+                    &app.file_chips,
+                )
+                .unwrap_or(next);
                 app.remember_input_undo_state();
-                app.input.drain(app.cursor_pos..next);
+                app.input.drain(app.cursor_pos..drain_end);
                 app.reset_tab_completion();
                 app.sync_model_picker_preview_from_input();
             }
@@ -3567,5 +3634,93 @@ impl App {
                 ));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod chip_deletion_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn chip(path: &str) -> PathBuf {
+        PathBuf::from(path)
+    }
+
+    #[test]
+    fn backspace_at_chip_end_deletes_whole_path() {
+        let input = "hello src/main.rs";
+        let cursor = input.len();
+        let chips = vec![chip("src/main.rs")];
+        let start = file_chip_backspace_start(input, cursor, &chips);
+        assert_eq!(start, Some(6), "should find chip start at byte 6");
+    }
+
+    #[test]
+    fn backspace_inside_chip_is_single_char() {
+        let input = "hello src/main.rs";
+        let cursor = input.len() - 3;
+        let chips = vec![chip("src/main.rs")];
+        let start = file_chip_backspace_start(input, cursor, &chips);
+        assert_eq!(start, None, "cursor not at chip end → no bulk delete");
+    }
+
+    #[test]
+    fn backspace_no_chip_is_unchanged() {
+        let input = "hello world";
+        let cursor = input.len();
+        let chips: Vec<PathBuf> = vec![];
+        let start = file_chip_backspace_start(input, cursor, &chips);
+        assert_eq!(start, None);
+    }
+
+    #[test]
+    fn delete_at_chip_start_deletes_whole_path() {
+        let input = "src/main.rs world";
+        let cursor = 0;
+        let chips = vec![chip("src/main.rs")];
+        let end = file_chip_delete_end(input, cursor, &chips);
+        assert_eq!(end, Some(11), "should find chip end at byte 11");
+    }
+
+    #[test]
+    fn delete_inside_chip_is_single_char() {
+        let input = "src/main.rs world";
+        let cursor = 3;
+        let chips = vec![chip("src/main.rs")];
+        let end = file_chip_delete_end(input, cursor, &chips);
+        assert_eq!(end, None, "cursor not at chip start → no bulk delete");
+    }
+
+    #[test]
+    fn delete_no_chip_is_unchanged() {
+        let input = "hello world";
+        let cursor = 0;
+        let chips: Vec<PathBuf> = vec![];
+        let end = file_chip_delete_end(input, cursor, &chips);
+        assert_eq!(end, None);
+    }
+
+    #[test]
+    fn longest_match_wins_on_overlap() {
+        // "main.rs" is a suffix of "src/main.rs"
+        let input = "check src/main.rs";
+        let cursor = input.len();
+        let chips = vec![chip("src/main.rs"), chip("main.rs")];
+        let start = file_chip_backspace_start(input, cursor, &chips);
+        assert_eq!(
+            start,
+            Some(6),
+            "longest match 'src/main.rs' wins over 'main.rs'"
+        );
+    }
+
+    #[test]
+    fn backspace_at_chip_end_with_non_ascii_path() {
+        let input = "查看 中文路径/文件.rs";
+        let cursor = input.len();
+        let chips = vec![chip("中文路径/文件.rs")];
+        let start = file_chip_backspace_start(input, cursor, &chips);
+        assert!(start.is_some(), "should handle non-ASCII paths");
+        assert_eq!(&input[start.unwrap()..cursor], "中文路径/文件.rs");
     }
 }

@@ -348,19 +348,33 @@ impl SearchHistory {
 /// Maximum number of results returned to the UI.
 const MAX_RESULTS: usize = 15;
 
-/// Return `true` when a directory path matches the user's query at a
-/// path-segment boundary.
+/// Check if `query` matches a directory path at a path-segment boundary.
 ///
+/// Matches when the last component of `dir_path` begins with `query`,
+/// or when `query/` appears as an exact prefix somewhere in `dir_path`.
 /// Examples for query "src":
-///   "src/"           → starts_with("src")     → true
-///   "crates/jcode-tui/src/" → contains("/src") → true
-///   "scripts/"       → neither                 → false
-fn dir_matches_query(query: &str, dir_path: &str) -> bool {
+///   "src/"              → last component "src" starts_with "src" → true
+///   "crates/jcode-tui/src/" → contains "/src/" → true
+///   "scripts/"          → last component is "scripts", not "src" → false
+fn dir_to_query_match(dir_path: &str, query: &str) -> bool {
+    // Direct match: dir starts with query (e.g. "src/" for query "src")
     if dir_path.starts_with(query) {
         return true;
     }
-    let segment = format!("/{}", query);
-    dir_path.contains(&segment)
+    // Segment match: "/query/" appears in path (e.g. "/src/" in "crates/.../src/")
+    let segment = format!("/{}/", query);
+    if dir_path.contains(&segment) {
+        return true;
+    }
+    // Trailing segment: path ends with "/query/" (already covered by contains)
+    // Also: last component of dir starts with query
+    if let Some(last_slash) = dir_path.trim_end_matches('/').rfind('/') {
+        let last = &dir_path[last_slash + 1..];
+        if last.starts_with(query) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Lightweight path-match used by the history cache (faster than match_entry).
@@ -525,40 +539,29 @@ fn search_in_index(
         }
     }
 
-    // Inject matching ancestor directories so users can navigate into
-    // them (e.g. @src shows crates/jcode-tui/src/ as a clickable dir).
+    // Build directory entries from matching ancestors of file results.
+    // Score 110 ensures directories rank above all file matches.
     if !query.is_empty() {
-        let mut new_dirs: Vec<FileMatch> = Vec::new();
-        let mut seen: HashSet<Arc<str>> = HashSet::new();
+        let mut dirs = HashSet::new();
         for r in &results {
-            seen.insert(r.path.clone());
-        }
-        for r in &results {
-            let full: &str = &r.path;
-            let mut remaining = full;
+            let mut remaining = r.path.as_ref();
             while let Some(slash) = remaining.rfind('/') {
-                let ancestor = &full[..slash + 1];
-                // Stop walking up once the ancestor no longer matches.
-                if !dir_matches_query(&query_lower, ancestor) {
-                    break;
+                let dir = &r.path[..slash + 1];
+                if dir_to_query_match(dir, &query_lower) {
+                    dirs.insert(Arc::from(dir));
                 }
-                let key: Arc<str> = Arc::from(ancestor);
-                if !seen.contains(&key) {
-                    seen.insert(key.clone());
-                    // Shorter paths rank higher within the same score tier.
-                    let depth_penalty = ancestor.matches('/').count() as f64 * 0.5;
-                    new_dirs.push(FileMatch {
-                        score: 95.0 - depth_penalty,
-                        path: key,
-                        is_directory: true,
-                        is_recent: false,
-                        is_likely_binary: false,
-                    });
-                }
-                remaining = &full[..slash];
+                remaining = &r.path[..slash];
             }
         }
-        results.extend(new_dirs);
+        for dir in dirs {
+            results.push(FileMatch {
+                score: 110.0,
+                path: dir,
+                is_directory: true,
+                is_recent: false,
+                is_likely_binary: false,
+            });
+        }
     }
 
     // Stable sort: score descending, then path ascending.
