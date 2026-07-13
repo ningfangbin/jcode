@@ -9,7 +9,7 @@
 
 /// A compact bitmap of the distinct characters in a string.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
-pub(crate) struct CharBag {
+pub(super) struct CharBag {
     bits: u64,
 }
 

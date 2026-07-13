@@ -1643,7 +1643,7 @@ impl App {
     /// appears anywhere in the input. This is a deliberate design choice:
     /// false positives (keeping a chip too long) are safer than false
     /// negatives (removing a chip that is still referenced).
-    pub(crate) fn prune_orphan_chips(&mut self) {
+    fn prune_orphan_chips(&mut self) {
         let text = &self.input;
         self.file_chips.retain(|chip_path| {
             let rel = chip_path.to_string_lossy();

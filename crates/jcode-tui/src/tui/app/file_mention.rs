@@ -185,7 +185,7 @@ fn glob_match_name(name: &str, pattern: &str) -> bool {
 
 /// A single file match produced by the search engine.
 #[derive(Clone, Debug)]
-pub(crate) struct FileMatch {
+pub(super) struct FileMatch {
     /// Match score (higher is better).
     pub score: f64,
     /// Relative file path.
@@ -856,7 +856,7 @@ impl FileIndexManager {
 /// Supports multiple workspace directories (P3-18). The first manager (index 0)
 /// is the primary workspace. Search results from secondary workspaces are
 /// prefixed with the workspace name.
-pub(crate) struct FileMentionCache {
+pub(super) struct FileMentionCache {
     /// Per-workspace index managers. Index 0 is the primary (cwd).
     managers: Vec<FileIndexManager>,
     /// Workspace display names (last path component) for result prefixing.
@@ -1158,7 +1158,7 @@ fn collect_dir_files(
 /// Paths are resolved against the current directory. Directories are
 /// recursively walked (up to 50 files per directory, respecting SKIP_DIRS).
 /// The same binary detection, size truncation, and budget management applies.
-pub(crate) fn build_prompt_with_files(input: &str, file_chips: &[PathBuf]) -> String {
+pub(super) fn build_prompt_with_files(input: &str, file_chips: &[PathBuf]) -> String {
     if file_chips.is_empty() {
         return input.to_string();
     }
