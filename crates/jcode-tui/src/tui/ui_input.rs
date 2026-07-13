@@ -14,6 +14,7 @@ use crate::tui::info_widget::occasional_status_tip;
 use crate::tui::layout_utils;
 use crate::tui::session_facts;
 use ratatui::{prelude::*, style::Modifier, widgets::Paragraph};
+use std::path::PathBuf;
 
 fn shell_mode_color() -> Color {
     rgb(110, 214, 151)
@@ -2157,6 +2158,61 @@ pub(super) fn draw_input(
         caret_color,
         prompt_len,
     );
+
+    // Highlight confirmed @file paths in a distinct color.
+    let all_lines: Vec<Line> = {
+        let chips = app.file_chips();
+        if chips.is_empty() {
+            all_lines
+        } else {
+            let chip_color = rgb(120, 200, 255);
+            all_lines
+                .into_iter()
+                .map(|line| {
+                    let mut new_spans = Vec::new();
+                    for span in line.spans {
+                        let text = span.content.to_string();
+                        let mut start = 0usize;
+                        while start < text.len() {
+                            let mut earliest: Option<(usize, usize)> = None;
+                            for chip in chips {
+                                let cs = chip.to_string_lossy();
+                                if let Some(pos) = text[start..].find(cs.as_ref()) {
+                                    let abs = start + pos;
+                                    let end = abs + cs.len();
+                                    match earliest {
+                                        Some((e, _)) if abs < e => earliest = Some((abs, end)),
+                                        None => earliest = Some((abs, end)),
+                                        _ => {}
+                                    }
+                                }
+                            }
+                            if let Some((e_start, e_end)) = earliest {
+                                if e_start > start {
+                                    new_spans.push(Span::styled(
+                                        text[start..e_start].to_string(),
+                                        span.style,
+                                    ));
+                                }
+                                new_spans.push(Span::styled(
+                                    text[e_start..e_end].to_string(),
+                                    span.style.fg(chip_color),
+                                ));
+                                start = e_end;
+                            } else {
+                                new_spans.push(Span::styled(
+                                    text[start..].to_string(),
+                                    span.style,
+                                ));
+                                break;
+                            }
+                        }
+                    }
+                    Line::from(new_spans)
+                })
+                .collect()
+        }
+    };
 
     let mut lines: Vec<Line> = Vec::new();
     let mut hint_shown = false;

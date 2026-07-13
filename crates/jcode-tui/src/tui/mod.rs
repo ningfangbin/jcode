@@ -254,6 +254,10 @@ pub trait TuiState {
     }
     fn status(&self) -> ProcessingStatus;
     fn command_suggestions(&self) -> Vec<(String, &'static str)>;
+    /// Absolute paths of confirmed @file references. Used for chip rendering.
+    fn file_chips(&self) -> &[std::path::PathBuf] {
+        &[]
+    }
     fn command_suggestion_selected(&self) -> usize {
         0
     }
