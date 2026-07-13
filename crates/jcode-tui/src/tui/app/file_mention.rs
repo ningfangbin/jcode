@@ -407,15 +407,11 @@ fn match_entry(entry: &FileEntry, query_lower: &str) -> f64 {
         return 65.0 * (1.0 - (pos as f64 / entry.filename.len().max(1) as f64));
     }
 
-    // L4 – full-path substring at segment boundary only.
-    // Avoids matching "src" inside "crates/jcode-app-core/src/..."
-    // indiscriminately (those are handled by L2b above).
+    // L4 – full-path substring  (~100 ns) ───────────────────────────
+    // Lower-priority catch-all. L2b above already gives higher scores
+    // to segment-boundary matches like "/src".
     if let Some(pos) = entry.path.find(query_lower) {
-        let is_segment_boundary = pos == 0
-            || entry.path.as_bytes().get(pos.wrapping_sub(1)) == Some(&b'/');
-        if is_segment_boundary {
-            return 45.0 * (1.0 - (pos as f64 / entry.path.len().max(1) as f64));
-        }
+        return 45.0 * (1.0 - (pos as f64 / entry.path.len().max(1) as f64));
     }
 
     // L5 – DP fuzzy subsequence  (~500 ns) ─────────────────────────
@@ -472,7 +468,8 @@ fn show_all_files(
                 is_recent: false,
                 is_likely_binary: false,
             });
-        } else if !entry.path.starts_with('.') {
+        } else if !entry.path.starts_with(".git/") && entry.path.as_ref() != ".git" {
+            // Skip only .git contents, keep other dotfiles (.gitignore, .env, etc.).
             root_files.push(FileMatch {
                 score: 0.0,
                 path: entry.path.clone(),
