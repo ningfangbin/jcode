@@ -25,8 +25,6 @@ struct FileEntry {
     pub path: Arc<str>,
     /// Just the filename portion, e.g. "startup.rs".
     pub filename: Arc<str>,
-    /// Parent directory path, e.g. "src/cli".
-    pub parent: Arc<str>,
     pub is_directory: bool,
     pub char_bag: CharBag,
 }
@@ -49,8 +47,6 @@ struct PathIndex {
     pub lazy_entries: Vec<FileEntry>,
     /// Directories whose files have already been lazy-scanned (dedup).
     pub scanned_ignored_dirs: HashSet<Arc<str>>,
-    /// Set of all known directory paths (for O(1) directory checks).
-    pub dirs: HashSet<Arc<str>>,
     /// Path → index into `entries` (not lazy_entries).
     pub path_to_index: HashMap<Arc<str>, usize>,
     /// Workspace root directory.
@@ -65,7 +61,6 @@ impl PathIndex {
             entries: Vec::new(),
             lazy_entries: Vec::new(),
             scanned_ignored_dirs: HashSet::new(),
-            dirs: HashSet::new(),
             path_to_index: HashMap::new(),
             root,
             built_at: Instant::now(),
@@ -504,7 +499,6 @@ async fn build_path_index(cwd: &Path) -> PathIndex {
     };
 
     let mut entries = Vec::with_capacity(file_paths.len());
-    let mut dirs = HashSet::new();
     let mut path_to_index = HashMap::with_capacity(file_paths.len());
 
     for (i, path_str) in file_paths.iter().enumerate() {
@@ -514,24 +508,10 @@ async fn build_path_index(cwd: &Path) -> PathIndex {
             .and_then(|n| n.to_str())
             .unwrap_or(path_str)
             .into();
-        let parent: Arc<str> = p
-            .parent()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default()
-            .into();
-
-        // Collect ancestor directories.
-        for ancestor in p.parent().into_iter().flat_map(|p| p.ancestors()) {
-            let a = ancestor.to_string_lossy();
-            if !a.is_empty() {
-                dirs.insert(Arc::from(a.into_owned().as_str()));
-            }
-        }
 
         let entry = FileEntry {
             path: Arc::from(path_str.as_str()),
             filename,
-            parent,
             is_directory: false,
             char_bag: CharBag::from(path_str),
         };
@@ -544,7 +524,6 @@ async fn build_path_index(cwd: &Path) -> PathIndex {
         entries,
         lazy_entries: Vec::new(),
         scanned_ignored_dirs: HashSet::new(),
-        dirs,
         path_to_index,
         root: cwd.to_path_buf(),
         built_at: Instant::now(),
@@ -762,7 +741,6 @@ fn try_scan_ignored_dir(dir_path: &str, index: &mut PathIndex) {
                         new_files.push(FileEntry {
                             path: Arc::from(rel_str),
                             filename,
-                            parent: dir_key.clone(),
                             is_directory: abs_path.is_dir(),
                             char_bag: CharBag::from(rel_str),
                         });
@@ -791,16 +769,10 @@ mod tests {
             .and_then(|n| n.to_str())
             .unwrap_or(path)
             .into();
-        let parent: Arc<str> = Path::new(path)
-            .parent()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default()
-            .into();
 
         FileEntry {
             path: Arc::from(path),
             filename,
-            parent,
             is_directory: false,
             char_bag: CharBag::from(path),
         }
@@ -824,7 +796,6 @@ mod tests {
             entries,
             lazy_entries: Vec::new(),
             scanned_ignored_dirs: HashSet::new(),
-            dirs: HashSet::new(),
             path_to_index: HashMap::new(),
             root: PathBuf::from("."),
             built_at: Instant::now(),

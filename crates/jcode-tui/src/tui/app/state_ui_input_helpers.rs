@@ -1235,7 +1235,15 @@ impl App {
                 self.cursor_pos = new_cursor;
                 self.tab_completion_state = None;
                 self.command_suggestion_selected = 0;
-                self.file_chips.push(abs_path);
+                self.file_chips.push(abs_path.clone());
+
+                // Record for recent-file ranking.
+                self.file_mention_cache
+                    .borrow_mut()
+                    .record_file_open(
+                        abs_path.to_string_lossy().into(),
+                    );
+
                 return true;
             }
             return false;
@@ -1549,6 +1557,7 @@ impl App {
     pub fn reset_tab_completion(&mut self) {
         self.tab_completion_state = None;
         self.command_suggestion_selected = 0;
+        self.prune_orphan_chips();
     }
 
     /// Remove file chips whose paths no longer appear in the input text.
