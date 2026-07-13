@@ -206,15 +206,15 @@ struct HistoryEntry {
     results: Vec<FileMatch>,
 }
 
-/// Incremental search-history cache.
+/// Exact-query search-history cache.
 ///
-/// Invariants:
-/// - `history[i].query` is a prefix of `history[i+1].query`
-/// - `history[i].results` ⊇ `history[i+1].results` (parent superset-of-child)
+/// Stores results only for exact matches (same query string).  Used for
+/// O(1) backspace recovery.  All other cases (prefix extension, partial
+/// match) fall through to a full `search_in_index` scan — the engine is
+/// fast enough (~0.3 ms for 5000 files) that incremental history filtering
+/// is not needed.
 ///
-/// Capacity is capped at `max_entries` (default 20). When the user makes a
-/// "jump edit" (e.g. deleting a middle character) the prefix invariant is
-/// violated and the entire history is cleared.
+/// Capacity is capped at `max_entries` (default 20).
 struct SearchHistory {
     entries: Vec<HistoryEntry>,
     max_entries: usize,
@@ -235,106 +235,25 @@ impl SearchHistory {
         }
     }
 
-    /// Try to satisfy `query` from the history cache.
-    ///
-    /// Three cases:
-    /// 1. Exact hit on the last entry → O(1).
-    /// 2. `query` extends the last entry → incrementally filter → push.
-    /// 3. `query` is a prefix of an earlier entry (backspace) → pop → hit.
-    /// Otherwise → Miss.
+    /// Returns `Hit` when `query` matches any cached entry exactly.
+    /// All other cases → `Miss` → full search in `search_in_index`.
     pub fn lookup(&mut self, query: &str) -> LookupResult {
         if query.is_empty() {
             self.entries.clear();
             return LookupResult::Miss;
         }
-
-        // Exact hit on the most recent entry.
-        if let Some(last) = self.entries.last() {
-            if last.query == query {
-                return LookupResult::Hit(last.results.clone());
-            }
+        if let Some(entry) = self.entries.iter().rev().find(|e| e.query == query) {
+            return LookupResult::Hit(entry.results.clone());
         }
-
-        // Incremental narrowing: user typed more characters.
-        if let Some(last) = self.entries.last() {
-            if query.starts_with(&last.query) && !last.query.is_empty() {
-                let filtered: Vec<FileMatch> = last
-                    .results
-                    .iter()
-                    .filter(|m| matches_filter(&m.path, query))
-                    .cloned()
-                    .collect();
-
-                if !filtered.is_empty() {
-                    self.entries.push(HistoryEntry {
-                        query: query.to_string(),
-                        results: filtered.clone(),
-                    });
-                    return LookupResult::Hit(filtered);
-                }
-            }
-        }
-
-        // Backspace recovery: walk backwards to find the deepest matching
-        // parent, then truncate the history to that point.
-        while self.entries.len() > 1 {
-            let parent_idx = self.entries.len() - 2;
-            let parent_query = self.entries[parent_idx].query.clone();
-            let parent_results = self.entries[parent_idx].results.clone();
-
-            if query.starts_with(&parent_query) {
-                self.entries.truncate(parent_idx + 1);
-
-                // If the user typed *more* than the parent but we don't have
-                // a direct entry, filter from the parent.
-                if query.len() > parent_query.len() {
-                    let filtered: Vec<FileMatch> = parent_results
-                        .iter()
-                        .filter(|m| matches_filter(&m.path, query))
-                        .cloned()
-                        .collect();
-                    if !filtered.is_empty() {
-                        self.entries.push(HistoryEntry {
-                            query: query.to_string(),
-                            results: filtered.clone(),
-                        });
-                        return LookupResult::Hit(filtered);
-                    }
-                }
-                return LookupResult::Hit(parent_results);
-            }
-            self.entries.pop();
-        }
-
         LookupResult::Miss
     }
 
-    /// Persist a full-search result.
-    ///
-    /// If the user made a "jump edit" (the last query is not a prefix of
-    /// `query`), the entire history is cleared before saving. This preserves
-    /// correctness at the cost of one extra full search.
+    /// Save a full-search result.  Capacity-controlled.
     pub fn save(&mut self, query: &str, results: &[FileMatch]) {
-        // Prefix-invariant guard: jump edits clear the history.
-        if let Some(last) = self.entries.last() {
-            if !query.starts_with(&last.query) && query != last.query {
-                self.entries.clear();
-            }
-        }
-
-        // Replace duplicate (backspace-then-same) entry.
-        if let Some(last) = self.entries.last() {
-            if last.query == query {
-                self.entries.pop();
-            }
-        }
-
         self.entries.push(HistoryEntry {
             query: query.to_string(),
             results: results.to_vec(),
         });
-
-        // Capacity control: drop the oldest entries.
         while self.entries.len() > self.max_entries {
             self.entries.remove(0);
         }
@@ -371,22 +290,6 @@ fn dir_to_query_match(dir_path: &str, query: &str) -> bool {
     if let Some(last_slash) = dir_path.trim_end_matches('/').rfind('/') {
         let last = &dir_path[last_slash + 1..];
         if last.starts_with(query) {
-            return true;
-        }
-    }
-    false
-}
-
-/// Lightweight path-match used by the history cache (faster than match_entry).
-fn matches_filter(path: &str, query: &str) -> bool {
-    if path.contains(query) {
-        return true;
-    }
-    if let Some(base) = Path::new(path)
-        .file_name()
-        .and_then(|n| n.to_str())
-    {
-        if base.contains(query) {
             return true;
         }
     }
@@ -1471,47 +1374,48 @@ mod tests {
     // -- SearchHistory ------------------------------------------------------
 
     #[test]
-    fn history_incremental_narrowing() {
-        let mut history = SearchHistory::new();
-        let all = vec![
-            file_match("src/cli/args.rs"),
-            file_match("src/cli/startup.rs"),
-            file_match("src/main.rs"),
-        ];
-
-        history.save("src", &all);
-        match history.lookup("src/cl") {
-            LookupResult::Hit(results) => {
-                assert_eq!(results.len(), 2);
-                assert!(results.iter().all(|r| r.path.contains("src/cl")));
-            }
-            _ => panic!("should be hit"),
-        }
-    }
+    // -- SearchHistory (exact-match only) -----------------------------------
 
     #[test]
-    fn history_backspace_recovery() {
-        let mut history = SearchHistory::new();
-        history.save("src", &vec![file_match("src/cli/args.rs"), file_match("src/main.rs")]);
-        history.save("src/cl", &vec![file_match("src/cli/args.rs")]);
-        history.save("src/cli", &vec![file_match("src/cli/args.rs")]);
-
-        match history.lookup("src/cl") {
-            LookupResult::Hit(results) => assert_eq!(results.len(), 1),
-            _ => panic!("should recover from history"),
-        }
-    }
-
-    #[test]
-    fn history_jump_edit_clears() {
+    fn history_exact_hit_after_save() {
         let mut history = SearchHistory::new();
         history.save("src", &[file_match("src/main.rs")]);
-        // User types "srx" — that's not a prefix extension of "src".
-        history.save("srx", &[file_match("srx")]);
-        // After the jump-edit clear, history should contain only "srx".
-        match history.lookup("srx") {
+        match history.lookup("src") {
             LookupResult::Hit(results) => assert_eq!(results.len(), 1),
-            _ => panic!("should hit after jump edit"),
+            _ => panic!("exact match should hit"),
         }
+    }
+
+    #[test]
+    fn history_miss_on_prefix_extension() {
+        // Incremental input like "src" → "src/" falls through to full search.
+        let mut history = SearchHistory::new();
+        history.save("src", &[file_match("src/main.rs")]);
+        assert!(matches!(
+            history.lookup("src/cli"),
+            LookupResult::Miss
+        ));
+    }
+
+    #[test]
+    fn history_backspace_to_exact() {
+        let mut history = SearchHistory::new();
+        history.save("src/cli", &[file_match("src/cli/args.rs")]);
+        history.save("src/cli/s", &[file_match("src/cli/startup.rs")]);
+        // Backspace to "src/cli" — exact match, hit.
+        match history.lookup("src/cli") {
+            LookupResult::Hit(results) => assert_eq!(results.len(), 1),
+            _ => panic!("backspace to exact should hit"),
+        }
+        // Backspace further to "src" — not exact, miss, triggers full search.
+        assert!(matches!(history.lookup("src"), LookupResult::Miss));
+    }
+
+    #[test]
+    fn history_empty_clears_and_misses() {
+        let mut history = SearchHistory::new();
+        history.save("abc", &[file_match("x")]);
+        assert!(matches!(history.lookup(""), LookupResult::Miss));
+        assert!(matches!(history.lookup("abc"), LookupResult::Miss));
     }
 }
