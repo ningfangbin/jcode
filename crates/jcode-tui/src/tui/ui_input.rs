@@ -15,14 +15,23 @@ use crate::tui::layout_utils;
 use crate::tui::session_facts;
 use ratatui::{prelude::*, style::Modifier, widgets::Paragraph};
 
+
 fn shell_mode_color() -> Color {
     rgb(110, 214, 151)
+}
+
+fn file_chip_style() -> Style {
+    Style::default()
+        .fg(rgb(20, 60, 80))
+        .bg(rgb(90, 210, 210))
+        .add_modifier(Modifier::BOLD)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ComposerMode {
     Chat,
     SlashCommand,
+    FileMention,
     ShellLocal,
     ShellRemote,
 }
@@ -42,9 +51,19 @@ fn composer_mode(input: &str, is_remote_mode: bool) -> ComposerMode {
         }
     } else if input.trim_start().starts_with('/') {
         ComposerMode::SlashCommand
+    } else if has_active_at_mention(input) {
+        ComposerMode::FileMention
     } else {
         ComposerMode::Chat
     }
+}
+
+/// Convenience predicate for callers that only need to branch on FileMention.
+pub(crate) fn is_at_file_mode(input: &str, is_remote_mode: bool) -> bool {
+    matches!(
+        composer_mode(input, is_remote_mode),
+        ComposerMode::FileMention
+    )
 }
 
 fn shell_mode_hint(mode: ComposerMode) -> Option<&'static str> {
@@ -53,6 +72,93 @@ fn shell_mode_hint(mode: ComposerMode) -> Option<&'static str> {
         ComposerMode::ShellRemote => Some("  shell mode · Enter runs on server"),
         _ => None,
     }
+}
+
+// ── @file syntax parsing ──────────────────────────────────────────
+
+/// Check whether the input contains an active @ mention.
+///
+/// @file mention parsing rules:
+///   1. Find `@` from right to left
+///   2. Left of `@` must be: SOL, whitespace, or `(` `[` `{`
+///   3. No whitespace immediately after `@`
+pub(crate) fn has_active_at_mention(input: &str) -> bool {
+    extract_at_query(input).is_some()
+}
+
+/// Extract @ query content. Returns `(at_sign_byte_offset, query_string)`.
+///
+/// Examples:
+///   "help me look at @main.rs"     → Some((12, "main.rs"))
+///   "help me look at @"           → Some((12, ""))
+///   "help me look at @ main.rs"   → None  (whitespace after @)
+///   "test@main.rs"                → None  (@ not at boundary)
+pub(crate) fn extract_at_query(input: &str) -> Option<(usize, String)> {
+    let last_at = input
+        .rmatch_indices('@')
+        .find(|(idx, _)| {
+            // No whitespace immediately after @.
+            // Note: idx+1 may equal input.len() — the slice is empty and
+            // starts_with() returns false, which is correct.
+            if input[*idx + 1..].starts_with(|c: char| c.is_whitespace()) {
+                return false;
+            }
+            // Left of @ must be SOL, whitespace, or opening bracket
+            if *idx > 0 {
+                let prev = input[..*idx].chars().last().unwrap();
+                prev.is_whitespace() || matches!(prev, '(' | '[' | '{')
+            } else {
+                true
+            }
+        })?;
+    let (pos, _) = last_at;
+
+    let after_at = &input[pos + 1..];
+    if after_at.is_empty() {
+        return Some((pos, String::new()));
+    }
+
+    let query_len = after_at
+        .chars()
+        .take_while(|c| !c.is_whitespace())
+        .count();
+    if query_len == 0 {
+        return None;
+    }
+
+    let query: String = after_at.chars().take(query_len).collect();
+    Some((pos, query))
+}
+
+/// Replace @query with the selected path (drop the @).
+pub(crate) fn replace_at_query(input: &str, new_path: &str) -> Option<(String, usize)> {
+    let (at_pos, _query) = extract_at_query(input)?;
+    let before = &input[..at_pos];
+    let after = &input[at_pos + 1..];
+    let skip = after
+        .chars()
+        .take_while(|c| !c.is_whitespace())
+        .count();
+    let rest: String = after.chars().skip(skip).collect();
+    let new_input = format!("{}{}{}", before, new_path, rest);
+    Some((new_input, before.len() + new_path.len()))
+}
+
+/// Replace @query with the selected path (keep the @, for tab completion).
+pub(crate) fn replace_at_query_keep_at(
+    input: &str,
+    new_path: &str,
+) -> Option<(String, usize)> {
+    let (at_pos, _query) = extract_at_query(input)?;
+    let before = &input[..at_pos];
+    let after = &input[at_pos + 1..];
+    let skip = after
+        .chars()
+        .take_while(|c| !c.is_whitespace())
+        .count();
+    let rest: String = after.chars().skip(skip).collect();
+    let new_input = format!("{}@{}{}", before, new_path, rest);
+    Some((new_input, before.len() + 1 + new_path.len()))
 }
 
 fn normalize_repaint_sensitive_notice_text(text: &str) -> String {
@@ -101,10 +207,15 @@ fn command_suggestion_lines(
     app: &dyn TuiState,
     suggestions: &[(String, &'static str)],
 ) -> Vec<Line<'static>> {
-    // Highlight the characters of each command that the typed query matched.
-    // We only highlight the command token itself (the part before the first
-    // space), matched against the corresponding leading token of the input.
-    let needle = command_suggestion_needle(app.input());
+    let mode = composer_mode(app.input(), app.is_remote_mode());
+    let is_file_mention = mode == ComposerMode::FileMention;
+
+    // For file mentions, extract the @ query for highlighting.
+    let needle = if is_file_mention {
+        extract_at_query(app.input()).map(|(_, q)| q)
+    } else {
+        command_suggestion_needle(app.input())
+    };
     let highlight = |cmd: &str, base: Style| -> Vec<Span<'static>> {
         highlight_command_spans(cmd, needle.as_deref(), base)
     };
@@ -132,18 +243,39 @@ fn command_suggestion_lines(
 
         for (i, (cmd, desc)) in limited.iter().enumerate() {
             let is_selected = i == selected_visible;
+            let is_section_header = is_file_mention && cmd.is_empty();
+
+            // Section headers render as dimmed, non-selectable lines.
+            if is_section_header {
+                lines.push(Line::from(vec![Span::styled(
+                    format!("  {}", desc),
+                    Style::default().fg(dim_color()).add_modifier(Modifier::BOLD),
+                )]));
+                continue;
+            }
+
+            let is_dir = is_file_mention && cmd.ends_with('/');
+
             let description_style = if is_selected {
                 Style::default().fg(rgb(255, 213, 128))
             } else {
                 Style::default().fg(dim_color())
             };
+            // File mention mode: directories blue, files teal.
             let command_style = if is_selected {
                 Style::default().fg(rgb(255, 213, 128))
+            } else if is_dir {
+                Style::default().fg(rgb(120, 180, 220))
             } else {
                 Style::default().fg(rgb(128, 203, 196))
             };
             let mut spans = highlight(cmd, command_style);
-            spans.push(Span::styled(format!("  {}", desc), description_style));
+            if is_dir && !is_selected {
+                // Directory visual: just use blue styling, trailing / is enough.
+            }
+            if !desc.is_empty() {
+                spans.push(Span::styled(format!("  {}", desc), description_style));
+            }
             if i == 0 && window_start > 0 {
                 spans.push(Span::styled(
                     format!("  ↑{}", window_start),
@@ -239,7 +371,7 @@ pub(super) fn input_hint_line_height(app: &dyn TuiState) -> u16 {
     let suggestions = app.command_suggestions();
     let mode = composer_mode(app.input(), app.is_remote_mode());
     let has_suggestions = !suggestions.is_empty()
-        && matches!(mode, ComposerMode::SlashCommand | ComposerMode::Chat)
+        && matches!(mode, ComposerMode::SlashCommand | ComposerMode::Chat | ComposerMode::FileMention)
         && (matches!(mode, ComposerMode::SlashCommand) || !app.is_processing());
 
     if has_suggestions {
@@ -1367,6 +1499,52 @@ mod tests {
     }
 
     #[test]
+    fn composer_mode_detects_at_file_mention() {
+        assert_eq!(composer_mode("@", false), ComposerMode::FileMention);
+        assert_eq!(composer_mode("@main.rs", false), ComposerMode::FileMention);
+        // @ after space should not trigger
+        assert_eq!(composer_mode(" @ ", false), ComposerMode::Chat);
+        // mid-word @ should not trigger
+        assert_eq!(composer_mode("test@main", false), ComposerMode::Chat);
+        // / takes priority over @
+        assert_eq!(
+            composer_mode("/help @main", false),
+            ComposerMode::SlashCommand
+        );
+        // Remote mode still allows @file
+        assert_eq!(composer_mode("@main", true), ComposerMode::FileMention);
+    }
+
+    #[test]
+    fn extract_at_query_basic() {
+        assert_eq!(
+            extract_at_query("help @main.rs"),
+            Some((5, "main.rs".to_string()))
+        );
+        assert_eq!(extract_at_query("@"), Some((0, "".to_string())));
+        assert_eq!(extract_at_query("x @main.rs y"), Some((2, "main.rs".to_string())));
+    }
+
+    #[test]
+    fn extract_at_query_no_trigger() {
+        assert_eq!(extract_at_query("@ "), None);
+        assert_eq!(extract_at_query("test@main"), None);
+        assert_eq!(extract_at_query(""), None);
+    }
+
+    #[test]
+    fn replace_at_query_drops_at_sign() {
+        let result = replace_at_query("see @main.rs please", "src/main.rs");
+        assert_eq!(result, Some(("see src/main.rs please".to_string(), 4 + "src/main.rs".len())));
+    }
+
+    #[test]
+    fn replace_at_query_keep_at_preserves_prefix() {
+        let result = replace_at_query_keep_at("see @mai", "main.rs");
+        assert_eq!(result, Some(("see @main.rs".to_string(), 5 + "main.rs".len())));
+    }
+
+    #[test]
     fn shell_mode_hint_reflects_execution_target() {
         assert_eq!(
             shell_mode_hint(ComposerMode::ShellLocal),
@@ -1972,7 +2150,7 @@ pub(super) fn draw_input(
     let mode = composer_mode(input_text, app.is_remote_mode());
     let suggestions = app.command_suggestions();
     let has_suggestions = !suggestions.is_empty()
-        && matches!(mode, ComposerMode::SlashCommand | ComposerMode::Chat)
+        && matches!(mode, ComposerMode::SlashCommand | ComposerMode::Chat | ComposerMode::FileMention)
         && (matches!(mode, ComposerMode::SlashCommand) || !app.is_processing());
 
     let (prompt_char, caret_color) = input_prompt(app);
@@ -1994,6 +2172,62 @@ pub(super) fn draw_input(
         caret_color,
         prompt_len,
     );
+
+    // Highlight confirmed @file paths with a distinct chip style
+    // (background color + bold) to visually separate them from plain text.
+    let all_lines: Vec<Line> = {
+        let chips = app.file_chips();
+        if chips.is_empty() {
+            all_lines
+        } else {
+            let chip_style = file_chip_style();
+            all_lines
+                .into_iter()
+                .map(|line| {
+                    let mut new_spans = Vec::new();
+                    for span in line.spans {
+                        let text = span.content.to_string();
+                        let mut start = 0usize;
+                        while start < text.len() {
+                            let mut earliest: Option<(usize, usize)> = None;
+                            for chip in chips {
+                                let cs = chip.to_string_lossy();
+                                if let Some(pos) = text[start..].find(cs.as_ref()) {
+                                    let abs = start + pos;
+                                    let end = abs + cs.len();
+                                    match earliest {
+                                        Some((e, _)) if abs < e => earliest = Some((abs, end)),
+                                        None => earliest = Some((abs, end)),
+                                        _ => {}
+                                    }
+                                }
+                            }
+                            if let Some((e_start, e_end)) = earliest {
+                                if e_start > start {
+                                    new_spans.push(Span::styled(
+                                        text[start..e_start].to_string(),
+                                        span.style,
+                                    ));
+                                }
+                                new_spans.push(Span::styled(
+                                    text[e_start..e_end].to_string(),
+                                    chip_style,
+                                ));
+                                start = e_end;
+                            } else {
+                                new_spans.push(Span::styled(
+                                    text[start..].to_string(),
+                                    span.style,
+                                ));
+                                break;
+                            }
+                        }
+                    }
+                    Line::from(new_spans)
+                })
+                .collect()
+        }
+    };
 
     let mut lines: Vec<Line> = Vec::new();
     let mut hint_shown = false;

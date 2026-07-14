@@ -51,6 +51,7 @@ pub enum AppRuntimeMode {
 mod auth;
 mod auth_account_picker_saved_accounts;
 mod catchup;
+mod char_bag;
 mod commands;
 mod commands_improve;
 mod commands_overnight;
@@ -61,6 +62,7 @@ mod copy_selection;
 mod debug;
 mod dictation;
 mod event_wrappers;
+mod file_mention;
 mod handterm_native_scroll;
 pub(crate) mod helpers;
 mod hotkey_feedback;
@@ -792,6 +794,10 @@ pub struct App {
     input: String,
     command_candidates_cache: RefCell<Option<CommandCandidatesCache>>,
     cursor_pos: usize,
+    /// @file search cache and index
+    file_mention_cache: RefCell<crate::tui::app::file_mention::FileMentionCache>,
+    /// Confirmed @file references (absolute paths); loaded on send
+    file_chips: Vec<PathBuf>,
     scroll_offset: usize,
     /// Pauses auto-scroll when user scrolls up during streaming
     auto_scroll_paused: bool,
