@@ -13,6 +13,10 @@ pub(crate) struct ResolvedTokenPricing {
     pub completion_price: f32,
     /// Cache-read price in $/1M tokens when known; falls back to `prompt_price`.
     pub cache_read_price: Option<f32>,
+    /// Cache-write (cache-creation) price in $/1M tokens when the active model
+    /// is priced by a `[pricing]` card that states one. `None` means the user
+    /// wrote no cache-write rate, and the pre-feature premium below applies.
+    pub cache_write_price: Option<f32>,
     /// Whether the active model is Anthropic/Claude (drives split-accounting and
     /// the cache-write premium).
     pub is_anthropic: bool,
@@ -42,6 +46,7 @@ impl ResolvedTokenPricing {
             prompt_price: card.input_per_mtok as f32,
             completion_price: card.output_per_mtok as f32,
             cache_read_price: card.cache_read_per_mtok.map(|rate| rate as f32),
+            cache_write_price: card.cache_write_per_mtok.map(|rate| rate as f32),
             is_anthropic,
             currency: card.currency.clone(),
         }
@@ -87,23 +92,32 @@ impl ResolvedTokenPricing {
             Some(price) => (cache_read_tokens as f32 * price) / 1_000_000.0,
             None => (cache_read_tokens as f32 * self.prompt_price) / 1_000_000.0,
         };
-        // Cache *writes* (cache-creation) are billed at a premium over the base
-        // input rate. Anthropic charges 1.25x for the 5-minute TTL and 2x for the
-        // 1-hour TTL; other split-accounting providers we approximate at the base
-        // input rate. Subset-accounting providers fold writes into `input_tokens`
-        // (and rarely report a creation count), so we only add this for split
-        // accounting to avoid double counting.
+        // Cache *writes* (cache-creation) are billed at the rate the user's own
+        // `[pricing]` card states when it states one (`cache_write_price`): the
+        // config is authoritative, and a rate the user wrote must not be
+        // replaced by a heuristic. Otherwise they keep the premium over the base
+        // input rate: Anthropic charges 1.25x for the 5-minute TTL and 2x for
+        // the 1-hour TTL, and other split-accounting providers we approximate at
+        // the base input rate. Subset-accounting providers fold writes into
+        // `input_tokens` (and rarely report a creation count), so we only add
+        // this for split accounting to avoid double counting.
         let cache_write_cost = if split_accounting && cache_creation_tokens > 0 {
-            let multiplier = if self.is_anthropic {
-                if crate::provider::anthropic::is_cache_ttl_1h() {
-                    2.0
-                } else {
-                    1.25
+            let price = match self.cache_write_price {
+                Some(price) => price,
+                None => {
+                    let multiplier = if self.is_anthropic {
+                        if crate::provider::anthropic::is_cache_ttl_1h() {
+                            2.0
+                        } else {
+                            1.25
+                        }
+                    } else {
+                        1.0
+                    };
+                    self.prompt_price * multiplier
                 }
-            } else {
-                1.0
             };
-            (cache_creation_tokens as f32 * self.prompt_price * multiplier) / 1_000_000.0
+            (cache_creation_tokens as f32 * price) / 1_000_000.0
         } else {
             0.0
         };
@@ -521,12 +535,15 @@ impl App {
         // is out of effect with `on_rule_expiry = "fallback"`): price from the
         // derived layers. Nothing here falls back to the generic defaults
         // unless the model is unknown to every source, which is the pre-feature
-        // behaviour.
+        // behaviour. Those layers state no cache-write rate either, so cache
+        // writes keep the premium they always had (F1: the config layer is the
+        // only one that can price a cache write differently).
         self.refresh_cached_pricing(model, is_anthropic, is_openai);
         PinnedCallPricing::Priced(ResolvedTokenPricing {
             prompt_price: *self.cost.cached_prompt_price.get_or_insert(15.0),
             completion_price: *self.cost.cached_completion_price.get_or_insert(60.0),
             cache_read_price: self.cost.cached_cache_read_price,
+            cache_write_price: None,
             is_anthropic,
             currency: self
                 .cost
@@ -753,6 +770,7 @@ mod tests {
             prompt_price: 1.0,
             completion_price: 2.0,
             cache_read_price: None,
+            cache_write_price: None,
             is_anthropic: false,
             currency: Currency::new("CNY"),
         };
