@@ -1716,8 +1716,8 @@ fn config_cache_reports_a_parse_failure_until_the_file_is_fixed() {
 /// executable: the block has to parse as a config (an invalid one makes jcode
 /// ignore the whole file) and price the call at the rates the document states.
 ///
-/// The doc now leads with the one-line `[[pricing.sources]]` pointer, so the
-/// inline CNY card is found by content rather than by position.
+/// The doc now leads with the vendor-file quick start, so the inline CNY card
+/// is found by content rather than by position.
 #[test]
 fn documented_pricing_example_prices_as_documented() {
     let doc = std::fs::read_to_string(concat!(
