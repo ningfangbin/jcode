@@ -916,7 +916,7 @@ mod tests {
                 .pricing
                 .sources
                 .iter()
-                .any(|source| source.id == "corp-mirror"),
+                .any(|source| source.id.as_deref() == Some("corp-mirror")),
             "the example should demonstrate an extra price sheet, got {:?}",
             parsed.pricing.sources
         );
